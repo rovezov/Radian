@@ -128,7 +128,7 @@ function _initModelPickerDropdown() {
     const q = (filter || '').toLowerCase();
 
     // Load favorites
-    const favs = (function() { try { return JSON.parse(localStorage.getItem('odysseus-model-favorites') || '[]'); } catch { return []; } })();
+    const favs = (function() { try { return JSON.parse(localStorage.getItem('radian-model-favorites') || '[]'); } catch { return []; } })();
 
     // Partition: favorites first, then rest
     const favModels = [];
@@ -203,7 +203,7 @@ function _initModelPickerDropdown() {
 
     // Broadcast immediately so listeners (e.g. the tour) can advance without
     // waiting for the async session-create/PATCH that follows.
-    try { document.dispatchEvent(new CustomEvent('odysseus:model-picked', { detail: m })); } catch {}
+    try { document.dispatchEvent(new CustomEvent('radian:model-picked', { detail: m })); } catch {}
 
     // Blur search input before closing to dismiss keyboard on mobile
     if (document.activeElement) document.activeElement.blur();
@@ -313,7 +313,7 @@ export function updateModelPicker() {
   } else if (_pendingChat && _pendingChat.modelId) {
     modelId = _pendingChat.modelId;
   }
-  // SECURITY: deliberately NOT auto-injecting `odysseus-model-favorites[0]`
+  // SECURITY: deliberately NOT auto-injecting `radian-model-favorites[0]`
   // here. localStorage favorites are per-browser, not per-user, so on a
   // shared browser the previous account's first favorited model would
   // silently pre-populate the chatbox of the next user that signed in. If

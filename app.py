@@ -175,12 +175,12 @@ if AUTH_ENABLED:
                 _client_host = request.client.host if request.client else None
                 if _hdr and _hdr == _ITT and _client_host in ("127.0.0.1", "::1"):
                     # Impersonation: when the agent's loopback call sets
-                    # X-Odysseus-Owner, attribute the request to that
+                    # X-Radian-Owner, attribute the request to that
                     # user so notes/calendar/etc. land in their account
                     # instead of being owned by "internal-tool" (which
                     # made the agent's POSTs invisible to the user that
                     # asked for them).
-                    _impersonate = (request.headers.get("X-Odysseus-Owner") or "").strip()
+                    _impersonate = (request.headers.get("X-Radian-Owner") or "").strip()
                     request.state.current_user = _impersonate or "internal-tool"
                     request.state.api_token = False
                     return await call_next(request)
@@ -843,13 +843,13 @@ async def startup_event():
 
     # Start scheduled task runner — skip when running under a cron-driven
     # deployment where an external worker drives task firing. Mirrors
-    # `ODYSSEUS_INPROCESS_POLLERS` from the email pollers.
-    _tasks_inprocess = os.environ.get("ODYSSEUS_INPROCESS_TASKS", "1").strip().lower()
+    # `RADIAN_INPROCESS_POLLERS` from the email pollers.
+    _tasks_inprocess = os.environ.get("RADIAN_INPROCESS_TASKS", "1").strip().lower()
     if _tasks_inprocess not in ("0", "false", "no", "off", ""):
         await task_scheduler.start()
     else:
         logger.info(
-            "In-process task scheduler disabled (ODYSSEUS_INPROCESS_TASKS=0); "
+            "In-process task scheduler disabled (RADIAN_INPROCESS_TASKS=0); "
             "drive task firing externally (e.g. cron)."
         )
     # Periodic null-owner sweep — re-runs the legacy-owner assignment hourly

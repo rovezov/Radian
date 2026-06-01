@@ -1,9 +1,9 @@
-# Odysseus
+# Radian
 ───────────────────────────────────────────────
- ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
+ ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Radian vers. 1.0
 ───────────────────────────────────────────────
 
-![Odysseus](docs/odysseus.jpg)
+![Radian](docs/radian.jpg)
 
 A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
 
@@ -38,23 +38,23 @@ A full, hover-to-play tour lives on the landing page (`docs/index.html`). A few 
 ## Quick Start
 
 Defaults work out of the box — clone, run, configure inside the app.
-Open the **Settings** panel after first login to point Odysseus at your LLM
+Open the **Settings** panel after first login to point Radian at your LLM
 server, search provider, email account, etc. Only touch `.env` if you need
 to override deployment-level things like `AUTH_ENABLED`, `DATABASE_URL`,
-or pre-seed `ODYSSEUS_ADMIN_PASSWORD` (otherwise an initial password is
+or pre-seed `RADIAN_ADMIN_PASSWORD` (otherwise an initial password is
 generated and printed on first boot).
 
 ### Option 1: Docker (recommended)
 ```bash
-git clone <your-odysseus-repo-url>
-cd odysseus
+git clone <your-radian-repo-url>
+cd radian
 cp .env.example .env       # optional, but recommended for explicit defaults
 docker compose up -d --build
 ```
-Compose starts Odysseus, ChromaDB, SearXNG, and ntfy. First run does a full
+Compose starts Radian, ChromaDB, SearXNG, and ntfy. First run does a full
 image build. Open `http://localhost:7000` after the containers are healthy.
 
-Cookbook remote servers use an Odysseus-owned SSH key from `./data/ssh`
+Cookbook remote servers use an Radian-owned SSH key from `./data/ssh`
 inside Docker. In **Cookbook -> Settings -> Servers**, generate/copy the
 public key and add it to the remote server's `~/.ssh/authorized_keys`.
 After generating the key, you can also install it from the host with:
@@ -62,14 +62,14 @@ After generating the key, you can also install it from the host with:
 ssh-copy-id -i data/ssh/id_ed25519.pub user@server
 ```
 Cookbook local downloads are stored in `./data/huggingface`, mounted as
-`~/.cache/huggingface` inside the Odysseus container.
+`~/.cache/huggingface` inside the Radian container.
 
 Useful checks:
 ```bash
 docker compose ps
-docker compose logs --tail=120 odysseus
-docker compose logs odysseus | grep -E 'ChromaDB|MemoryVectorStore|DEGRADED'
-docker compose exec odysseus python -c "from services.hwfit.models import get_models; print(len(get_models()))"
+docker compose logs --tail=120 radian
+docker compose logs radian | grep -E 'ChromaDB|MemoryVectorStore|DEGRADED'
+docker compose exec radian python -c "from services.hwfit.models import get_models; print(len(get_models()))"
 ```
 
 Expected vector-memory startup lines in Docker:
@@ -79,7 +79,7 @@ MemoryVectorStore initialized
 ```
 
 The Cookbook model catalog check should print a non-zero count. If it prints
-`0`, rebuild the Odysseus image with `docker compose build --no-cache odysseus`.
+`0`, rebuild the Radian image with `docker compose build --no-cache radian`.
 
 ### Option 2: Manual install — Linux / macOS
 **Requirements:** Python 3.11+. On Linux/Termux, Cookbook also requires `tmux`
@@ -97,10 +97,10 @@ sudo pacman -S tmux
 sudo dnf install tmux
 ```
 
-Then install Odysseus:
+Then install Radian:
 ```bash
-git clone <your-odysseus-repo-url>
-cd odysseus
+git clone <your-radian-repo-url>
+cd radian
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -110,8 +110,8 @@ uvicorn app:app --host 0.0.0.0 --port 7000
 
 ### Option 3: Manual install — Windows (PowerShell)
 ```powershell
-git clone <your-odysseus-repo-url>
-cd odysseus
+git clone <your-radian-repo-url>
+cd radian
 python -m venv venv
 venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -123,7 +123,7 @@ Open `http://localhost:7000`, log in with the generated admin password,
 and configure everything else inside **Settings**.
 
 ## Security Notes
-Odysseus is a self-hosted workspace with powerful local tools: shell access, file uploads, model downloads, web research, email/calendar integrations, and API tokens. Treat it like an admin console.
+Radian is a self-hosted workspace with powerful local tools: shell access, file uploads, model downloads, web research, email/calendar integrations, and API tokens. Treat it like an admin console.
 
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Do not expose it directly to the public internet without HTTPS and a trusted reverse proxy.
@@ -136,12 +136,12 @@ Odysseus is a self-hosted workspace with powerful local tools: shell access, fil
 - Before publishing a fork, run `git status --short` and confirm no private files from `.env`, `data/`, `logs/`, uploads, backups, or local databases are staged.
 
 ### Putting it behind HTTPS
-Odysseus serves plain HTTP on its port. That's fine for `localhost` and trusted LAN/VPN use, but browsers will warn ("Password fields present on an insecure page") and the login + API tokens travel in cleartext. For anything reachable outside your machine — including a Tailscale IP shared with other devices — put a TLS-terminating reverse proxy in front.
+Radian serves plain HTTP on its port. That's fine for `localhost` and trusted LAN/VPN use, but browsers will warn ("Password fields present on an insecure page") and the login + API tokens travel in cleartext. For anything reachable outside your machine — including a Tailscale IP shared with other devices — put a TLS-terminating reverse proxy in front.
 
 Shortest path with [Caddy](https://caddyserver.com/) (auto-renews Let's Encrypt certs):
 
 ```caddy
-odysseus.example.com {
+radian.example.com {
   reverse_proxy localhost:7000
 }
 ```
@@ -174,8 +174,8 @@ Key settings:
 ### Bundled services
 Docker Compose includes these by default:
 
-  - **ChromaDB** → vector store for semantic memory. In Docker, Odysseus connects to `chromadb:8000`; from the host it is exposed as `localhost:8100`.
-  - **SearXNG** → meta search for web search. In Docker, Odysseus connects to `searxng:8080`; from the host it is exposed only on `127.0.0.1:8080`.
+  - **ChromaDB** → vector store for semantic memory. In Docker, Radian connects to `chromadb:8000`; from the host it is exposed as `localhost:8100`.
+  - **SearXNG** → meta search for web search. In Docker, Radian connects to `searxng:8080`; from the host it is exposed only on `127.0.0.1:8080`.
   - **ntfy** → local notification service, exposed as `localhost:8091`.
 
 ### Optional external services

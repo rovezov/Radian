@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Odysseus — first-time setup script.
+"""Radian — first-time setup script.
 
 Creates data directories, initializes the database, and sets up an
 initial admin user. Safe to re-run (skips what already exists).
@@ -54,8 +54,8 @@ def create_default_admin():
         import bcrypt
         import json
 
-        username = os.getenv("ODYSSEUS_ADMIN_USER", "admin").strip() or "admin"
-        password = os.getenv("ODYSSEUS_ADMIN_PASSWORD") or __import__("secrets").token_urlsafe(18)
+        username = os.getenv("RADIAN_ADMIN_USER", "admin").strip() or "admin"
+        password = os.getenv("RADIAN_ADMIN_PASSWORD") or __import__("secrets").token_urlsafe(18)
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         auth_data = {
             "users": {
@@ -69,7 +69,7 @@ def create_default_admin():
             json.dump(auth_data, f, indent=2)
         print(f"  [ok] Initial admin user created ({username})")
         print(f"        Temporary password: {password}")
-        print(f"        ** Change it after first login. Set ODYSSEUS_ADMIN_PASSWORD to choose your own. **")
+        print(f"        ** Change it after first login. Set RADIAN_ADMIN_PASSWORD to choose your own. **")
     except ImportError:
         print("  [warn] bcrypt not installed — skipping admin user creation")
         print("         Run: pip install bcrypt")
@@ -117,7 +117,7 @@ def check_deps():
 
 
 def main():
-    print("\n=== Odysseus Setup ===\n")
+    print("\n=== Radian Setup ===\n")
 
     print("1. Creating directories...")
     create_dirs()

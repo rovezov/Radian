@@ -1,15 +1,15 @@
 services:
-  odysseus:
+  radian:
     build: .
     ports:
       - "7000:7000"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      # Cookbook remote-server SSH identity. Odysseus can generate a key here;
+      # Cookbook remote-server SSH identity. Radian can generate a key here;
       # add the shown public key to each remote server's authorized_keys.
       - ./data/ssh:/app/.ssh
-      # Cookbook local model cache. Inside Docker, "Local" means the Odysseus
+      # Cookbook local model cache. Inside Docker, "Local" means the Radian
       # container, so persist its HuggingFace cache under ./data/huggingface.
       - ./data/huggingface:/app/.cache/huggingface
     env_file:
