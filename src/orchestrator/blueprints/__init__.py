@@ -72,10 +72,6 @@ def _merged_blueprints() -> dict[str, BlueprintTemplate]:
     return _custom_blueprints_map()
 
 
-def is_builtin_blueprint(name: str) -> bool:
-    return False
-
-
 def list_blueprint_dicts() -> list[dict]:
     rows = []
     for name, bp in _merged_blueprints().items():

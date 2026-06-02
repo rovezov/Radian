@@ -97,8 +97,6 @@ def setup_orchestrator_routes() -> APIRouter:
         name = (blueprint_name or "").strip().lower()
         if not name:
             raise HTTPException(400, "Blueprint name is required")
-        if blueprint_store.is_builtin_blueprint(name):
-            raise HTTPException(400, "Built-in blueprints cannot be deleted")
         deleted = blueprint_store.delete_custom_blueprint(name)
         if not deleted:
             raise HTTPException(404, "Blueprint not found")
