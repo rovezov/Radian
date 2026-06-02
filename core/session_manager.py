@@ -307,6 +307,24 @@ class SessionManager:
             # Lazy hydrate: metadata-only entries get their messages on first read.
             if not cached.history and getattr(cached, "message_count", 0) > 0:
                 self._load_session_from_db(session_id)
+            else:
+                db = SessionLocal()
+                try:
+                    row = (
+                        db.query(DbSession.message_count)
+                        .filter(DbSession.id == session_id)
+                        .first()
+                    )
+                    db_count = int(getattr(row, "message_count", 0) or 0) if row else 0
+                    cached_count = len(cached.history or [])
+                    # Background systems can append directly to the DB while this
+                    # session object stays resident in memory. When that happens,
+                    # reload so history APIs and active-chat refreshes see the new
+                    # assistant message instead of serving a stale cache forever.
+                    if db_count > cached_count:
+                        self._load_session_from_db(session_id)
+                finally:
+                    db.close()
 
         # Update last_accessed
         self._touch_session(session_id)

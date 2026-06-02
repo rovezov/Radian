@@ -11,10 +11,15 @@ const API_BASE = window.location.origin;
 let _open = false;
 let _tasksCascadeNext = false;   // play the domino-in entrance on the next render
 let _tasks = [];
+let _orchestratorRuns = [];
+let _orchestratorRunsSig = '';
 let _tasksFetched = false;   // first-fetch sentinel — `false` → show loading row instead of "No tasks yet"
+let _orchestratorFetched = false;
 let _escHandler = null;
 let _viewingRuns = null; // task id when viewing run history
 let _clockInterval = null;
+let _queuePollInterval = null;
+let _selectedOrchestratorRunId = null;
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -133,6 +138,33 @@ async function _fetchRuns(taskId, limit = 10) {
   if (!res.ok) return [];
   const data = await res.json();
   return data.runs || [];
+}
+
+async function _fetchOrchestratorRuns(limit = 50) {
+  try {
+    const res = await fetch(`${API_BASE}/api/orchestrator/runs?limit=${limit}`, {
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error('Failed to load orchestrator runs');
+    const data = await res.json();
+    const nextRuns = data.runs || [];
+    const nextSig = _orchestratorRunsSignature(nextRuns);
+    const changed = nextSig !== _orchestratorRunsSig;
+    _orchestratorRuns = nextRuns;
+    _orchestratorRunsSig = nextSig;
+    _orchestratorFetched = true;
+    return changed;
+  } catch (e) {
+    console.error('Failed to fetch orchestrator runs:', e);
+    const nextRuns = [];
+    const nextSig = _orchestratorRunsSignature(nextRuns);
+    const changed = nextSig !== _orchestratorRunsSig;
+    _orchestratorRuns = [];
+    _orchestratorRunsSig = nextSig;
+    _orchestratorFetched = true;
+    return changed;
+  }
+  
 }
 
 let _outputTargets = null;
@@ -1641,8 +1673,250 @@ function _switchTab(tab) {
     b.classList.toggle('active', on);
   });
   if (tab === 'tasks') _renderMainView();
+  else if (tab === 'queue') _renderQueueView();
   else if (tab === 'activity') _renderActivityView();
   else if (tab === 'new') _showPresetPicker();
+}
+
+function _statusBadge(status) {
+  const map = {
+    queued: '#9aa0a6',
+    running: '#4ea1ff',
+    completed: '#4caf50',
+    failed: '#f44336',
+    cancelled: '#ff9800',
+  };
+  const c = map[status] || '#9aa0a6';
+  return `<span style="display:inline-flex;align-items:center;gap:6px;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c}"></span>${_esc(status || 'unknown')}</span>`;
+}
+
+function _orchestratorRunsSignature(runs) {
+  try {
+    return JSON.stringify((runs || []).map((r) => [
+      r.id,
+      r.status,
+      r.current_step_index || 0,
+      r.updated_at || '',
+      r.error_message || '',
+      (r.final_output || '').slice(0, 80),
+      Array.isArray(r.results) ? r.results.length : 0,
+    ]));
+  } catch (_) {
+    return String(Date.now());
+  }
+}
+
+function _renderOrchestratorRunDetails(run) {
+  if (!run) {
+    return '<div class="memory-empty" style="padding:24px 8px;">Select a run to view full details.</div>';
+  }
+  const plan = run.plan || {};
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const results = Array.isArray(run.results) ? run.results : [];
+  const resultByStepId = new Map(results.map((r) => [r.step_id, r]));
+  const started = run.created_at ? _absoluteTime(run.created_at) : '—';
+  const updated = run.updated_at ? _absoluteTime(run.updated_at) : '—';
+  const completedCount = results.filter((r) => r.status === 'passed').length;
+  const summaryText = `${completedCount}/${Math.max(steps.length, completedCount)} steps passed`;
+  const showCancel = run.status === 'queued' || run.status === 'running';
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:8px;">
+      <h3 style="margin:0;font-size:13px;line-height:1.2;">Run ${_esc(String(run.id || '').slice(0, 10))}</h3>
+      <span style="margin-left:auto;font-size:11px;opacity:.7;">${_statusBadge(run.status)}</span>
+    </div>
+    <div style="font-size:11px;opacity:.7;line-height:1.5;margin-top:6px;">
+      Started ${_esc(started)} · Updated ${_esc(updated)} · ${_esc(summaryText)}
+    </div>
+    <div style="font-size:11px;opacity:.78;margin-top:8px;line-height:1.45;">
+      <strong>Where final answer appears:</strong> in this Queue detail panel under <strong>Final output</strong>, and on completion it is posted back into the originating chat session.
+    </div>
+  `;
+
+  if (showCancel) {
+    html += `
+      <div style="margin-top:8px;">
+        <button type="button" class="memory-toolbar-btn danger" id="orchestrator-cancel-run" data-run-id="${_esc(run.id)}">Cancel run</button>
+      </div>
+    `;
+  }
+
+  html += `
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid color-mix(in srgb, var(--border) 75%, transparent);">
+      <div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Blueprint</div>
+      <div style="font-size:12px;margin-top:4px;">${_esc(plan.blueprint_type || 'unknown')}</div>
+    </div>
+    <div style="margin-top:8px;">
+      <div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Objective</div>
+      <div style="font-size:12px;line-height:1.45;margin-top:4px;white-space:normal;word-break:break-word;">${_esc(plan.objective || '—')}</div>
+    </div>
+    <div style="margin-top:10px;">
+      <div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Final output</div>
+      <pre style="margin:6px 0 0 0;padding:8px;border:1px solid color-mix(in srgb, var(--border) 75%, transparent);border-radius:8px;background:var(--panel);font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;">${_esc(run.final_output || '(not available yet)')}</pre>
+    </div>
+  `;
+
+  if (run.error_message) {
+    const errText = String(run.error_message || '');
+    const is502 = /\b502\b/.test(errText) || /host\.docker\.internal:11434/i.test(errText);
+    html += `
+      <div style="margin-top:10px;">
+        <div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Run error</div>
+        <pre style="margin:6px 0 0 0;padding:8px;border:1px solid color-mix(in srgb, var(--red) 45%, var(--border));border-radius:8px;background:color-mix(in srgb, var(--red) 8%, transparent);font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;">${_esc(run.error_message)}</pre>
+        ${is502 ? '<div style="font-size:11px;opacity:.78;line-height:1.45;margin-top:6px;">Upstream model endpoint is unreachable (502). Verify the provider service is running/reachable from the app container and that the selected model exists on that endpoint.</div>' : ''}
+      </div>
+    `;
+  }
+
+  html += '<div style="margin-top:10px;"><div style="font-size:11px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;">Step-by-step logs</div>';
+
+  if (!steps.length) {
+    html += '<div class="memory-empty" style="padding:12px 4px;">No plan steps recorded.</div>';
+  } else {
+    html += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px;">';
+    steps.forEach((step, i) => {
+      const stepId = step.step_id;
+      const result = resultByStepId.get(stepId);
+      const stepStatus = result?.status || (i < Number(run.current_step_index || 0) ? 'passed' : (run.status === 'running' && i === Number(run.current_step_index || 0) ? 'running' : 'pending'));
+      const tools = Array.isArray(step.tools) ? step.tools : [];
+      const model = String(step.model || '').trim() || 'auto';
+      html += `
+        <details style="border:1px solid color-mix(in srgb, var(--border) 75%, transparent);border-radius:8px;padding:6px 8px;background:var(--panel);" ${i === 0 ? 'open' : ''}>
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;">
+            <span style="font-weight:600;font-size:12px;">${_esc(`${i + 1}. ${step.title || 'Step'}`)}</span>
+            <span style="margin-left:auto;font-size:11px;opacity:.7;">${_statusBadge(stepStatus)}</span>
+          </summary>
+          <div style="font-size:11px;opacity:.78;line-height:1.45;margin-top:6px;">${_esc(step.description || '')}</div>
+          <div style="font-size:10px;opacity:.72;margin-top:6px;line-height:1.4;">model: ${_esc(model)} · tools: ${_esc(tools.length ? tools.join(', ') : 'none')} · attempts: ${_esc(String(result?.attempts || 0))}</div>
+          <div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;margin-top:8px;">Output</div>
+          <pre style="margin:4px 0 0 0;padding:7px;border:1px solid color-mix(in srgb, var(--border) 75%, transparent);border-radius:6px;background:color-mix(in srgb, var(--bg2) 65%, transparent);font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;">${_esc(result?.output || '(no output captured yet)')}</pre>
+          ${result?.error ? `<div style="font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.06em;margin-top:8px;">Step error</div><pre style="margin:4px 0 0 0;padding:7px;border:1px solid color-mix(in srgb, var(--red) 45%, var(--border));border-radius:6px;background:color-mix(in srgb, var(--red) 8%, transparent);font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto;">${_esc(result.error)}</pre>` : ''}
+        </details>
+      `;
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function _paintQueueView(list, detail) {
+  if (!list) return;
+
+  const listTop = list.scrollTop;
+  const detailTop = detail ? detail.scrollTop : 0;
+
+  const tabCount = document.getElementById('orchestrator-tab-count');
+  if (tabCount) tabCount.textContent = String(_orchestratorRuns.length);
+  const headCount = document.getElementById('orchestrator-head-count');
+  if (headCount) headCount.textContent = _orchestratorRuns.length ? `${_orchestratorRuns.length} runs` : '';
+
+  if (_orchestratorRuns.length === 0) {
+    _selectedOrchestratorRunId = null;
+    list.innerHTML = _orchestratorFetched
+      ? '<div style="opacity:0.4;font-size:12px;text-align:center;padding:24px 0;">No orchestrator runs yet.</div>'
+      : '';
+    if (detail) detail.innerHTML = '<div class="memory-empty" style="padding:24px 8px;">No run selected.</div>';
+  } else {
+    if (!_selectedOrchestratorRunId || !_orchestratorRuns.some((r) => r.id === _selectedOrchestratorRunId)) {
+      _selectedOrchestratorRunId = _orchestratorRuns[0].id;
+    }
+
+    list.innerHTML = '';
+    for (const run of _orchestratorRuns) {
+      const card = document.createElement('div');
+      card.className = 'memory-item';
+      card.style.cursor = 'pointer';
+      if (run.id === _selectedOrchestratorRunId) {
+        card.style.borderColor = 'color-mix(in srgb, var(--red) 50%, var(--border))';
+        card.style.background = 'color-mix(in srgb, var(--red) 10%, transparent)';
+      }
+      const started = run.created_at ? _absoluteTime(run.created_at) : '';
+      const summary = Array.isArray(run.results)
+        ? run.results.filter(r => r.status === 'passed').length + ' step(s) passed'
+        : '';
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="memory-item-title" style="flex:1;">Run ${_esc(String(run.id || '').slice(0, 10))}</span>
+          <span style="font-size:10px;opacity:0.55;">${_esc(started)}</span>
+        </div>
+        <div class="memory-item-meta" style="font-size:11px;opacity:0.65;margin-top:4px;">${_statusBadge(run.status)} · Step ${Number(run.current_step_index || 0) + 1}</div>
+        <div style="font-size:11px;opacity:0.6;margin-top:4px;line-height:1.4;">${_esc(summary || run.error_message || run.final_output || '')}</div>
+      `;
+      card.addEventListener('click', () => {
+        _selectedOrchestratorRunId = run.id;
+        _paintQueueView(list, detail);
+      });
+      list.appendChild(card);
+    }
+
+    const selected = _orchestratorRuns.find((r) => r.id === _selectedOrchestratorRunId) || _orchestratorRuns[0];
+    if (detail) {
+      detail.innerHTML = _renderOrchestratorRunDetails(selected);
+      const cancelBtn = detail.querySelector('#orchestrator-cancel-run');
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', async () => {
+          const rid = cancelBtn.getAttribute('data-run-id');
+          if (!rid) return;
+          try {
+            const res = await fetch(`${API_BASE}/api/orchestrator/runs/${encodeURIComponent(rid)}/cancel`, {
+              method: 'POST',
+              credentials: 'same-origin',
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (uiModule?.showToast) uiModule.showToast('Run cancelled');
+            await _fetchOrchestratorRuns();
+            _paintQueueView(list, detail);
+          } catch (e) {
+            if (uiModule?.showError) uiModule.showError('Failed to cancel run');
+          }
+        });
+      }
+    }
+  }
+
+  // Keep user's scroll position when background polls repaint the list/detail.
+  list.scrollTop = listTop;
+  if (detail) detail.scrollTop = detailTop;
+}
+
+async function _renderQueueView(opts = {}) {
+  const skipFetch = !!opts.skipFetch;
+  const modal = document.getElementById('tasks-modal');
+  const body = modal?.querySelector('.modal-body');
+  if (!body) return;
+
+  let list = body.querySelector('#orchestrator-list');
+  let detail = body.querySelector('#orchestrator-detail');
+  if (!list || !detail) {
+    body.innerHTML = `
+      <div class="admin-card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px;">
+          <h2 style="margin:0;padding:0;line-height:1;">Queue <span id="orchestrator-head-count" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal"></span></h2>
+          <button class="memory-toolbar-btn" id="orchestrator-refresh" title="Refresh" style="margin-left:auto;">Refresh</button>
+        </div>
+        <p class="memory-desc">Background orchestrator executions from approved plan cards.</p>
+        <div style="display:grid;grid-template-columns:minmax(240px, 330px) 1fr;gap:10px;min-height:0;flex:1;">
+          <div id="orchestrator-list" class="memory-list" style="overflow:auto;"></div>
+          <div id="orchestrator-detail" style="border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:10px;overflow:auto;min-height:120px;"></div>
+        </div>
+      </div>
+    `;
+    list = body.querySelector('#orchestrator-list');
+    detail = body.querySelector('#orchestrator-detail');
+    if (list) list.appendChild(spinnerModule.createLoadingRow('Loading…'));
+    if (detail) detail.innerHTML = '<div class="memory-empty" style="padding:24px 8px;">Loading run details…</div>';
+    document.getElementById('orchestrator-refresh')?.addEventListener('click', async () => {
+      await _fetchOrchestratorRuns();
+      _paintQueueView(list, detail);
+    });
+  }
+
+  if (!skipFetch) {
+    await _fetchOrchestratorRuns();
+  }
+  _paintQueueView(list, detail);
 }
 
 // ---- Activity view (assistant session log) ----
@@ -2355,6 +2629,9 @@ export function openTasks(focusId) {
   _open = true;
   _tasksCascadeNext = true;
   _viewingRuns = null;
+  _orchestratorRuns = [];
+  _orchestratorRunsSig = '';
+  _orchestratorFetched = false;
   _outputTargets = null; // refresh available targets
   _builtinActions = null;
   _triggerEvents = null;
@@ -2373,6 +2650,10 @@ export function openTasks(focusId) {
         <button class="memory-tab tasks-tab active" data-tab="tasks" role="tab" aria-selected="true">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           Tasks <span id="tasks-tab-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span>
+        </button>
+        <button class="memory-tab tasks-tab" data-tab="queue" role="tab" aria-selected="false">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+          Queue <span id="orchestrator-tab-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span>
         </button>
         <button class="memory-tab tasks-tab" data-tab="activity" role="tab" aria-selected="false">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -2463,6 +2744,23 @@ export function openTasks(focusId) {
     }
     _runFirstOpenOnboarding();
   });
+
+  if (_queuePollInterval) clearInterval(_queuePollInterval);
+  _queuePollInterval = setInterval(async () => {
+    if (!_open || _activeTab !== 'queue') return;
+    const changed = await _fetchOrchestratorRuns();
+    if (changed) {
+      _renderQueueView({ skipFetch: true });
+    }
+  }, 5000);
+}
+
+export function openTasksOnTab(tab = 'tasks') {
+  openTasks();
+  if (tab && tab !== 'tasks') {
+    _activeTab = tab;
+    _switchTab(tab);
+  }
 }
 
 let _pendingFocusTaskId = null;
@@ -2505,6 +2803,10 @@ export function closeTasks() {
   if (_clockInterval) {
     clearInterval(_clockInterval);
     _clockInterval = null;
+  }
+  if (_queuePollInterval) {
+    clearInterval(_queuePollInterval);
+    _queuePollInterval = null;
   }
   // Detach the form-Esc capture listener if it survived (e.g. user closed the
   // modal from the X / outside-click while the form was open).
@@ -2568,6 +2870,6 @@ function stopNotificationPolling() {
 // Start polling on module load
 startNotificationPolling();
 
-const tasksModule = { openTasks, closeTasks, isTasksOpen, startNotificationPolling, stopNotificationPolling };
+const tasksModule = { openTasks, openTasksOnTab, closeTasks, isTasksOpen, startNotificationPolling, stopNotificationPolling };
 export default tasksModule;
 window.tasksModule = tasksModule;

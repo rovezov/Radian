@@ -16,6 +16,8 @@ let sessions = [];
 let currentSessionId = null;
 let _sessionNavToken = 0;
 let _skipAutoSelect = false;
+let _historySyncInterval = null;
+let _activeHistorySignature = '';
 
 const SIDEBAR_MAX_VISIBLE = 10;
 const FOLDER_MAX_VISIBLE = 5;
@@ -26,6 +28,97 @@ let _autoCreateInProgress = false; // guard against recursive auto-create
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
 const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const _mod = _isMac ? '⌘' : 'Ctrl';
+
+function _historySignature(history) {
+  const list = Array.isArray(history) ? history : [];
+  const last = list.length ? list[list.length - 1] : null;
+  const meta = last && last.metadata ? last.metadata : {};
+  return JSON.stringify([
+    list.length,
+    last ? (last.role || '') : '',
+    last ? String(last.content || '').slice(0, 120) : '',
+    meta._db_id || meta.timestamp || '',
+  ]);
+}
+
+function _historyIsPrefix(prevHistory, nextHistory) {
+  const prev = Array.isArray(prevHistory) ? prevHistory : [];
+  const next = Array.isArray(nextHistory) ? nextHistory : [];
+  if (prev.length > next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i] || {};
+    const b = next[i] || {};
+    const aMeta = a.metadata || {};
+    const bMeta = b.metadata || {};
+    if ((a.role || '') !== (b.role || '')) return false;
+    if (String(a.content || '') !== String(b.content || '')) return false;
+    const aId = aMeta._db_id || aMeta.timestamp || '';
+    const bId = bMeta._db_id || bMeta.timestamp || '';
+    if (aId && bId && aId !== bId) return false;
+  }
+  return true;
+}
+
+async function _syncActiveSessionHistory() {
+  const sid = currentSessionId;
+  if (!sid || !window.chatModule) return;
+  const submitBtn = document.querySelector('.send-btn');
+  const activelyStreaming = submitBtn?.dataset?.mode === 'streaming';
+  if (activelyStreaming && window.chatModule.hasActiveStream?.(sid)) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/history/${sid}`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (sid !== currentSessionId) return;
+
+    const nextHistory = Array.isArray(data.history) ? data.history : [];
+    const nextSig = _historySignature(nextHistory);
+    if (nextSig === _activeHistorySignature) return;
+
+    const chatHistory = uiModule.el('chat-history');
+    const currentMsgs = chatHistory ? Array.from(chatHistory.querySelectorAll('.msg')) : [];
+    const currentHistory = currentMsgs.map((node) => ({
+      role: node.classList.contains('msg-user') ? 'user' : 'assistant',
+      content: String(node.dataset.raw || ''),
+      metadata: node._meta || null,
+    }));
+
+    if (_historyIsPrefix(currentHistory, nextHistory)) {
+      const missing = nextHistory.slice(currentHistory.length);
+      if (missing.length) {
+        const nearBottom = !!chatHistory && (chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight) < 80;
+        for (const msg of missing) {
+          const meta = msg.metadata ? { ...msg.metadata, _fromHistory: true } : null;
+          let displayContent = typeof msg.content === 'string' ? msg.content : (msg.content ? String(msg.content) : '');
+          if (msg.role === 'user') {
+            if (displayContent.trim() === 'Continue where you left off' || displayContent.trim().startsWith('Your message was cut off.') || displayContent.trim().startsWith('Your previous response was interrupted.') || displayContent.includes('[Instruction: Rewrite') || displayContent.includes('[Instruction: Explain')) continue;
+            const docEditMatch = displayContent.match(/^In the document, edit this specific text \((lines? [\d-]+)\):\n```\n([\s\S]*?)\n```\n\nInstruction: ([\s\S]*)$/);
+            if (docEditMatch) {
+              displayContent = `[Doc edit: ${docEditMatch[1]}] ${docEditMatch[3]}`;
+            }
+          }
+          window.chatModule.addMessage(msg.role, markdownModule.renderContent(displayContent), data.model || '', meta);
+        }
+        if (nearBottom) uiModule.scrollHistoryInstant();
+      }
+    } else {
+      await selectSession(sid, { keepSidebar: true });
+      return;
+    }
+
+    _activeHistorySignature = nextSig;
+  } catch (e) {
+    console.warn('Active session history sync failed:', e);
+  }
+}
+
+function _ensureHistorySyncPolling() {
+  if (_historySyncInterval) return;
+  _historySyncInterval = setInterval(() => {
+    _syncActiveSessionHistory();
+  }, 5000);
+}
 
 function _getIncognitoIds() {
   try { return JSON.parse(sessionStorage.getItem(_INCOGNITO_SESSIONS_KEY) || '[]'); } catch { return []; }
@@ -1304,6 +1397,7 @@ function _animateSessionRowsRemoving(ids, selector) {
 
 export async function loadSessions() {
   try {
+    _ensureHistorySyncPolling();
     // Delete incognito sessions left over from a previous page load
     await _cleanupIncognitoSessions();
 
@@ -1623,6 +1717,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
       // Don't highlight empty sessions — feels like nothing is selected
       document.querySelectorAll('.list-item.active-session').forEach(el => el.classList.remove('active-session'));
     }
+    _activeHistorySignature = _historySignature(msgHistory);
     uiModule.scrollHistoryInstant();
 
     // Fade in and re-enable message animations
@@ -1714,6 +1809,38 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
 // Pending session — stored locally until the first message is sent
 let _pendingChat = null; // { url, modelId, endpointId }
 
+function _syncModeForPendingChat() {
+  try {
+    const toggles = Storage.loadToggleState();
+    const mode = toggles.mode || 'chat';
+
+    const orchestratorBtn = document.getElementById('mode-orchestrator-btn');
+    const agentBtn = document.getElementById('mode-agent-btn');
+    const chatBtn = document.getElementById('mode-chat-btn');
+    if (orchestratorBtn) orchestratorBtn.classList.toggle('active', mode === 'orchestrator');
+    if (agentBtn) agentBtn.classList.toggle('active', mode === 'agent');
+    if (chatBtn) chatBtn.classList.toggle('active', mode === 'chat');
+    const toggle = (chatBtn || agentBtn || orchestratorBtn)?.closest('.mode-toggle');
+    if (toggle) {
+      toggle.classList.toggle('mode-agent', mode === 'agent');
+      toggle.classList.toggle('mode-chat', mode !== 'agent');
+    }
+
+    document.querySelectorAll('[data-mode-tool]').forEach((btn) => {
+      btn.style.display = mode === 'agent' ? '' : 'none';
+    });
+
+    const webBtn = document.getElementById('web-toggle-btn');
+    const bashBtn = document.getElementById('bash-toggle-btn');
+    const webChk = document.getElementById('web-toggle');
+    const bashChk = document.getElementById('bash-toggle');
+    if (webBtn) webBtn.classList.toggle('active', !!toggles[`web_${mode}`]);
+    if (bashBtn) bashBtn.classList.toggle('active', !!toggles[`bash_${mode}`]);
+    if (webChk) webChk.checked = !!toggles[`web_${mode}`];
+    if (bashChk) bashChk.checked = !!toggles[`bash_${mode}`];
+  } catch (_) {}
+}
+
 export function createDirectChat(url, modelId, endpointId) {
   _sessionNavToken++;
   // Detach any active stream so it doesn't interfere with the new chat
@@ -1729,6 +1856,7 @@ export function createDirectChat(url, modelId, endpointId) {
 
   // Don't hit the API — just store the model info and prepare the UI
   _pendingChat = { url, modelId, endpointId };
+  _syncModeForPendingChat();
   _skipAutoSelect = true;
   currentSessionId = null;
   Storage.remove('lastSessionId');

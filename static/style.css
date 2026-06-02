@@ -2429,54 +2429,77 @@ body.bg-pattern-sparkles {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.7; }
     }
-    /* Mode toggle — Agent / Chat */
+    /* Mode toggle — Agent / Chat / Orchestrator */
     .mode-toggle {
       display: flex;
       flex-shrink: 0;
-      height: 28px;
+      height: 32px;
+      min-width: 260px;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 14px;
       overflow: hidden;
       position: relative;
+      background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg2) 70%, transparent) 0%,
+        color-mix(in srgb, var(--bg) 85%, transparent) 100%
+      );
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 6%, transparent);
     }
     .mode-toggle::before {
       content: '';
       position: absolute;
       top: 0;
       left: 0;
-      width: 50%;
+      width: 33.3333%;
       height: 100%;
-      background: color-mix(in srgb, var(--fg) 10%, transparent);
-      border-radius: 9px;
+      background: color-mix(in srgb, var(--fg) 20%, transparent);
+      border-radius: 13px;
       transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
       z-index: 0;
+      box-shadow:
+        inset 0 1px 0 color-mix(in srgb, var(--fg) 18%, transparent),
+        0 0 0 1px color-mix(in srgb, var(--fg) 8%, transparent);
     }
-    .mode-toggle.mode-chat::before {
+    .mode-toggle.mode-agent::before {
       transform: translateX(100%);
     }
-    #mode-agent-btn {
+    .mode-toggle.mode-chat::before {
+      transform: translateX(200%);
+    }
+    #mode-orchestrator-btn {
       border-radius: 10px 0 0 10px;
+    }
+    #mode-agent-btn {
+      border-radius: 0;
     }
     #mode-chat-btn {
       border-radius: 0 10px 10px 0;
     }
     .mode-toggle-btn {
+      flex: 1 1 0;
       background: none;
       border: none;
-      color: color-mix(in srgb, var(--fg) 40%, transparent);
+      color: color-mix(in srgb, var(--fg) 68%, transparent);
       cursor: pointer;
-      padding: 0 10px;
-      font-size: 11px;
-      font-weight: 500;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 600;
       font-family: inherit;
-      transition: color 0.2s;
+      transition: color 0.2s, background 0.2s;
       white-space: nowrap;
       height: 100%;
       position: relative;
       z-index: 1;
+      text-align: center;
+      letter-spacing: 0;
+    }
+    .mode-toggle-btn + .mode-toggle-btn {
+      border-left: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
     }
     .mode-toggle-btn:not(.active):hover {
-      color: color-mix(in srgb, var(--fg) 60%, transparent);
+      color: color-mix(in srgb, var(--fg) 78%, transparent);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
     }
     .mode-toggle-btn:hover {
       background: none !important;
@@ -2489,9 +2512,7 @@ body.bg-pattern-sparkles {
       background: none !important;
       border-color: transparent !important;
       cursor: default;
-    }
-    .mode-toggle-btn + .mode-toggle-btn {
-      border-left: none;
+      text-shadow: 0 0 0.6px color-mix(in srgb, var(--fg) 70%, transparent);
     }
     /* Message count badge in the chat-meta header (next to the title).
        Auto-hides when empty so a brand-new chat doesn't show "0 msgs". */
@@ -3152,9 +3173,40 @@ body.bg-pattern-sparkles {
       margin-top:6px;
     }
     .msg-edit-save, .msg-edit-cancel {
+    .orchestrator-blueprint-picker {
+      display: none;
+      align-items: center;
+      flex-shrink: 1;
+      min-width: 140px;
+      max-width: 240px;
+    }
+    .orchestrator-blueprint-picker select {
+      width: 100%;
+      height: 32px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg2) 70%, transparent);
+      color: var(--fg);
+      padding: 0 28px 0 10px;
+      font-size: 12px;
+      font-weight: 600;
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--fg) 75%, transparent) 50%), linear-gradient(135deg, color-mix(in srgb, var(--fg) 75%, transparent) 50%, transparent 50%);
+      background-position: calc(100% - 13px) calc(50% - 1px), calc(100% - 8px) calc(50% - 1px);
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+    }
+    .orchestrator-blueprint-picker select:focus {
+      outline: none;
+      border-color: color-mix(in srgb, var(--fg) 45%, var(--border));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 14%, transparent);
+    }
       background:var(--bg);
       color:var(--fg);
       border:1px solid var(--border);
+    @container chatbar (max-width: 520px) {
+      .chat-input-right .orchestrator-blueprint-picker { display: none !important; }
+    }
       border-radius:6px;
       padding:4px 14px;
       cursor:pointer;
@@ -3854,18 +3906,20 @@ body.bg-pattern-sparkles {
       }
       /* Mode toggle — larger touch targets */
       .mode-toggle {
-        height: 34px;
-        border-radius: 12px;
+        height: 38px;
+        min-width: 248px;
+        border-radius: 14px;
       }
       .mode-toggle::before {
-        border-radius: 11px;
+        border-radius: 13px;
       }
       .mode-toggle-btn {
-        padding: 0 14px;
+        padding: 0 8px;
         font-size: 12px;
         min-height: 34px;
       }
-      #mode-agent-btn { border-radius: 12px 0 0 12px; }
+      #mode-orchestrator-btn { border-radius: 12px 0 0 12px; }
+      #mode-agent-btn { border-radius: 0; }
       #mode-chat-btn { border-radius: 0 12px 12px 0; }
       /* Diff mode — stack toolbar, bigger buttons */
       .diff-toolbar {
@@ -9480,6 +9534,31 @@ details a:hover {
   margin-top: 0 !important;
   min-width: 220px;
 }
+.memory-tab-panel[data-memory-panel="blueprints"] .admin-card {
+  min-height: 0;
+}
+.blueprint-layout {
+  min-height: 0;
+  overflow: hidden;
+}
+.blueprint-list-pane,
+.blueprint-editor-pane {
+  min-height: 0;
+}
+.blueprint-editor-pane {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+@media (max-width: 760px) {
+  .blueprint-layout {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+  .blueprint-list-pane {
+    max-height: 180px;
+  }
+}
 @media (max-width: 640px) {
   .memory-tab-panel[data-memory-panel="skills"] { flex-direction: column; }
   .memory-tab-panel[data-memory-panel="skills"] > .admin-card:nth-of-type(2) {
@@ -9526,6 +9605,29 @@ textarea.memory-add-input {
 .memory-add-input:focus {
   outline: none;
   border-color: var(--red);
+}
+.blueprint-steps-json-hidden {
+  display: none;
+}
+.blueprint-steps-summary {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 180px;
+  overflow: auto;
+}
+.blueprint-steps-summary-empty {
+  opacity: 0.7;
+}
+.blueprint-steps-summary-list {
+  margin: 0;
+  padding-left: 16px;
+}
+.blueprint-steps-summary-list li {
+  margin: 2px 0;
 }
 
 .memory-add-btn {
@@ -9898,6 +10000,246 @@ textarea.memory-add-input {
 .memory-item:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   border-color: color-mix(in srgb, var(--fg) 16%, transparent);
+}
+
+.blueprint-steps-modal-content {
+  width: min(980px, 94vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.blueprint-steps-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.blueprint-steps-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.blueprint-step-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.blueprint-step-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.blueprint-step-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.blueprint-step-card-chip {
+  font-size: 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  color: var(--red);
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+.blueprint-step-card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.blueprint-step-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.blueprint-step-grid > .full {
+  grid-column: 1 / -1;
+}
+.blueprint-step-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.blueprint-step-label > span {
+  font-size: 10px;
+  opacity: 0.75;
+}
+.blueprint-step-input,
+.blueprint-step-select,
+.blueprint-step-textarea {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 11px;
+  box-sizing: border-box;
+}
+.blueprint-step-input,
+.blueprint-step-select {
+  height: 28px;
+  padding: 0 8px;
+}
+.blueprint-step-select[multiple] {
+  height: 84px;
+  padding: 4px 8px;
+}
+.blueprint-step-textarea {
+  min-height: 54px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.blueprint-step-input:focus,
+.blueprint-step-select:focus,
+.blueprint-step-textarea:focus {
+  outline: none;
+  border-color: var(--red);
+}
+.blueprint-steps-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .blueprint-step-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.orchestrator-plan-card {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  overflow: visible;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg2) 78%, transparent) 0%,
+    color-mix(in srgb, var(--bg) 92%, transparent) 100%
+  );
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.orchestrator-plan-card > * {
+  min-width: 0;
+}
+.orchestrator-plan-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.orchestrator-plan-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: normal;
+}
+.orchestrator-plan-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.75;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  text-transform: capitalize;
+}
+.orchestrator-plan-objective {
+  font-size: 12px;
+  opacity: 0.88;
+  line-height: 1.55;
+  white-space: normal;
+  word-break: break-word;
+}
+.orchestrator-plan-label {
+  font-size: 10px;
+  opacity: 0.58;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+.orchestrator-plan-steps {
+  margin: 0;
+  padding: 0 0 0 18px;
+}
+.orchestrator-plan-step {
+  margin: 0 0 10px 0;
+  line-height: 1.45;
+}
+.orchestrator-plan-step-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.96;
+  white-space: normal;
+}
+.orchestrator-plan-step-desc {
+  font-size: 11px;
+  opacity: 0.72;
+  margin-top: 2px;
+  white-space: normal;
+  word-break: break-word;
+}
+.orchestrator-plan-step-meta {
+  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+.orchestrator-plan-model {
+  font-size: 10px;
+  opacity: 0.68;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.orchestrator-plan-tools-wrap {
+  font-size: 10px;
+  opacity: 0.78;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.orchestrator-plan-tool {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border-radius: 999px;
+  padding: 2px 6px;
+  line-height: 1.2;
+}
+.orchestrator-plan-tool-muted {
+  opacity: 0.7;
+}
+.orchestrator-plan-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.orchestrator-plan-card .orchestrator-status {
+  font-size: 11px;
+  opacity: 0.65;
 }
 /* Synapse pulse — a brief horizontal light sweep runs left → right across
    each memory like a signal traversing a neural pathway. Per-item stagger

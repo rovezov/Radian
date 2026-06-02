@@ -7,6 +7,7 @@ import { addAITTSButton } from './tts-ai.js';
 import { providerLogo } from './providers.js';
 import settingsModule from './settings.js';
 import spinnerModule from './spinner.js';
+import { enhanceOrchestratorPlanCards } from './orchestratorPlanCard.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -867,6 +868,28 @@ export function buildFindingsBox(findings, expanded) {
     + '<div class="sources-content' + expandedClass + '" id="' + id + '">'
     + '<div class="sources-content-inner">' + lines + '</div>'
     + '</div></div>';
+}
+
+function _buildOrchestratorReportHtml(text, metadata) {
+  var esc = uiModule.esc;
+  var report = String(metadata?.orchestrator_report || text || '').trim();
+  var raw = String(metadata?.orchestrator_raw_output || text || '').trim();
+  var objective = String(metadata?.objective || '').trim();
+  var blueprint = String(metadata?.blueprint_type || '').trim();
+
+  var metaBits = '';
+  if (objective) metaBits += '<span><strong>Objective:</strong> ' + esc(objective) + '</span>';
+  if (blueprint) metaBits += '<span><strong>Blueprint:</strong> ' + esc(blueprint) + '</span>';
+  var head = '<div class="orchestrator-report-head">'
+    + '<div class="orchestrator-report-title">Final Report</div>'
+    + (metaBits ? '<div class="orchestrator-report-meta">' + metaBits + '</div>' : '')
+    + '</div>';
+
+  var reportHtml = markdownModule.processWithThinking(report || raw || 'No output was captured.');
+  var rawHtml = raw
+    ? '<details class="orchestrator-raw-details"><summary>View raw orchestrator output</summary><pre>' + esc(raw) + '</pre></details>'
+    : '';
+  return head + reportHtml + rawHtml;
 }
 
 /** Append report button + continue research prompt. */
@@ -1928,8 +1951,10 @@ export function addMessage(role, content, modelName, metadata) {
             agentFindingsSuffix += buildRagSourcesBox(metadata.rag_sources);
           }
           body.innerHTML = agentSourcesPrefix + markdownModule.processWithThinking(markdownModule.squashOutsideCode(txt)) + agentFindingsSuffix;
+          enhanceOrchestratorPlanCards(body);
           wrap.appendChild(body);
           wrap.dataset.raw = txt;
+          wrap._meta = metadata || null;
           if (metadata?._db_id) wrap.dataset.dbId = metadata._db_id;
           box.appendChild(wrap);
           lastWrap = wrap;
@@ -1982,6 +2007,7 @@ export function addMessage(role, content, modelName, metadata) {
       const firstWrap = lastMsgAi || lastWrap;
       if (firstWrap && firstWrap.classList.contains('msg-ai')) {
         if (metadata?.memories_used?.length) firstWrap._memoriesUsed = metadata.memories_used;
+        firstWrap._meta = metadata || null;
         firstWrap.appendChild(createMsgFooter(firstWrap));
         if (metadata) displayMetrics(firstWrap, metadata);
       }
@@ -2047,6 +2073,7 @@ export function addMessage(role, content, modelName, metadata) {
     }
 
     wrap.dataset.raw = text;
+    wrap._meta = metadata || null;
     if (metadata?._db_id) wrap.dataset.dbId = metadata._db_id;
     // Prepend sources box if saved in metadata
     var sourcesPrefix = '';
@@ -2063,8 +2090,11 @@ export function addMessage(role, content, modelName, metadata) {
     if (role === 'assistant' && metadata?.rag_sources?.length) {
       findingsSuffix += buildRagSourcesBox(metadata.rag_sources);
     }
+    const isOrchestratorCompletion = role === 'assistant' && metadata?.source === 'orchestrator';
     // If thinking is stored in metadata (not in text), reconstruct the full display
-    if (role === 'assistant' && metadata?.thinking) {
+    if (isOrchestratorCompletion) {
+      b.innerHTML = _buildOrchestratorReportHtml(text, metadata);
+    } else if (role === 'assistant' && metadata?.thinking) {
       const thinkTime = metadata.thinking_time || null;
       const thinkHtml = markdownModule.processWithThinking(
         '<think' + (thinkTime ? ` time="${thinkTime}"` : '') + '>' + metadata.thinking + '</think>\n\n' + text
@@ -2072,6 +2102,9 @@ export function addMessage(role, content, modelName, metadata) {
       b.innerHTML = sourcesPrefix + thinkHtml + findingsSuffix;
     } else {
       b.innerHTML = sourcesPrefix + markdownModule.processWithThinking(text) + findingsSuffix;
+    }
+    if (role === 'assistant') {
+      enhanceOrchestratorPlanCards(b);
     }
 
     // The vision/OCR caption is stripped from the displayed text above (so the

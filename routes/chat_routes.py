@@ -33,6 +33,7 @@ from routes.chat_helpers import (
     clean_thinking_for_save,
     _enforce_chat_privileges,
 )
+from src.orchestrator.planner import maybe_handle_planning_turn
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,8 @@ def setup_chat_routes(
         search_context = form_data.get("search_context")  # pre-fetched web search results (compare mode)
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
         incognito = str(form_data.get("incognito", "")).lower() == "true"
-        chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
+        chat_mode = str(form_data.get("mode", "")).lower()  # 'chat', 'agent', or 'orchestrator'
+        orchestrator_blueprint = str(form_data.get("orchestrator_blueprint", "")).strip().lower()
         # Did the USER explicitly pick agent mode? (vs. us auto-escalating
         # below). Skill extraction should only learn from real agent sessions,
         # not chats we quietly promoted for a notes/calendar intent.
@@ -333,6 +335,26 @@ def setup_chat_routes(
             # index would be useless / unwanted noise.
             agent_mode=(chat_mode == "agent"),
         )
+
+        # Planning interception (Phase 1): in orchestrator mode, detect complex
+        # objectives and emit a structured plan card payload instead of a
+        # direct answer. Approval uses /api/orchestrator/dispatch.
+        planning_result = None
+        if chat_mode == "orchestrator" and not do_research and not compare_mode and isinstance(message, str):
+            try:
+                planning_result = await maybe_handle_planning_turn(
+                    session_id=session,
+                    owner=ctx.user,
+                    message=message,
+                    endpoint_url=sess.endpoint_url,
+                    model=sess.model,
+                    headers=sess.headers,
+                    selected_blueprint=orchestrator_blueprint,
+                    force_plan=True,
+                )
+            except Exception:
+                logger.exception("Planning interception failed")
+                planning_result = None
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope
 
@@ -461,6 +483,28 @@ def setup_chat_routes(
 
             # Register active stream for partial-save safety net
             _active_streams[session] = {"status": "streaming", "partial": "", "query": message, "is_research": do_research, "mode": _effective_mode}
+
+            if planning_result is not None:
+                response_text = planning_result.get("response_text", "")
+                yield f'data: {json.dumps({"type": "model_info", "model": sess.model})}\n\n'
+                if response_text:
+                    yield f'data: {json.dumps({"delta": response_text})}\n\n'
+                    _saved_id = save_assistant_response(
+                        sess, session_manager, session, response_text, None,
+                        character_name=ctx.preset.character_name,
+                        web_sources=web_sources,
+                        rag_sources=ctx.rag_sources,
+                        research_sources=research_sources,
+                        used_memories=ctx.used_memories,
+                        do_research=False,
+                        incognito=incognito,
+                    )
+                    if _saved_id:
+                        yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
+                _stream_set(session, status="done")
+                yield "data: [DONE]\n\n"
+                _active_streams.pop(session, None)
+                return
 
             if ctx.preprocessed.attachment_meta:
                 yield f"data: {json.dumps({'type': 'attachments', 'data': ctx.preprocessed.attachment_meta})}\n\n"
@@ -690,7 +734,7 @@ def setup_chat_routes(
                 yield "data: [DONE]\n\n"
                 _active_streams.pop(session, None)
                 return
-            elif chat_mode == "chat":
+            elif chat_mode in ("chat", "orchestrator"):
                 _chat_start = time.time()
                 # ── Chat mode: call stream_llm directly, NO tools, NO document access ──
                 try:

@@ -1136,12 +1136,21 @@ async function _cmdToggleSidebar(args, ctx) {
 
 async function _cmdMode(args, ctx) {
   const mode = (args[0] || '').toLowerCase();
-  if (mode !== 'agent' && mode !== 'chat') {
-    slashReply(`Current mode: ${Storage.getToggle('mode', 'chat')}. Usage: /mode &lt;agent|chat&gt;`);
+  if (mode !== 'agent' && mode !== 'chat' && mode !== 'orchestrator') {
+    slashReply(`Current mode: ${Storage.getToggle('mode', 'chat')}. Usage: /mode &lt;agent|chat|orchestrator&gt;`);
     return true;
   }
-  const ab = document.getElementById('mode-agent-btn'), cb = document.getElementById('mode-chat-btn');
-  if (ab && cb) { ab.classList.toggle('active', mode === 'agent'); cb.classList.toggle('active', mode === 'chat'); }
+  const ab = document.getElementById('mode-agent-btn'), cb = document.getElementById('mode-chat-btn'), ob = document.getElementById('mode-orchestrator-btn');
+  if (ab && cb && ob) {
+    ab.classList.toggle('active', mode === 'agent');
+    cb.classList.toggle('active', mode === 'chat');
+    ob.classList.toggle('active', mode === 'orchestrator');
+    const t = ab.closest('.mode-toggle');
+    if (t) {
+      t.classList.toggle('mode-agent', mode === 'agent');
+      t.classList.toggle('mode-chat', mode === 'chat');
+    }
+  }
   Storage.setToggle('mode', mode);
   document.querySelectorAll('[data-mode-tool]').forEach(b => { b.style.display = mode === 'agent' ? '' : 'none'; });
   await typewriterReply(`Mode: ${mode}`);
@@ -2116,11 +2125,16 @@ async function _cmdDemo(args, ctx) {
   try {
     const _agentBtn = document.getElementById('mode-agent-btn');
     const _chatBtn  = document.getElementById('mode-chat-btn');
-    if (_agentBtn && _chatBtn) {
+    const _orchBtn  = document.getElementById('mode-orchestrator-btn');
+    if (_agentBtn && _chatBtn && _orchBtn) {
       _agentBtn.classList.remove('active');
       _chatBtn.classList.add('active');
+      _orchBtn.classList.remove('active');
       const _t = _agentBtn.closest('.mode-toggle');
-      if (_t) _t.classList.add('mode-chat');
+      if (_t) {
+        _t.classList.remove('mode-agent');
+        _t.classList.add('mode-chat');
+      }
     }
     // Web is persisted per-mode under web_chat / web_agent. Zero both so the
     // toggle is genuinely off when the user reaches the "turn it on" step.

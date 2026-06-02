@@ -370,7 +370,7 @@ export function mdToHtml(src) {
   // CRITICAL: Extract code blocks and replace with placeholders
   const codeBlocks = [];
   const mermaidBlocks = [];
-  s = s.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+  s = s.replace(/```([A-Za-z0-9_+-]+)?\n([\s\S]*?)```/g, (_, lang, code) => {
     const cleaned = code
       .replace(/\r\n/g, '\n')
       .replace(/[ \t]+$/gm, '')

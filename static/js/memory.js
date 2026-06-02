@@ -1349,6 +1349,12 @@ document.addEventListener('DOMContentLoaded', () => {
       // Lazy-load skills tab (cascade=true → play the domino-in entrance)
       if (target === 'skills') {
         import('./skills.js').then(m => { if (m.loadSkills) m.loadSkills(true); else if (m.default?.loadSkills) m.default.loadSkills(true); });
+      } else if (target === 'blueprints') {
+        import('./blueprints.js').then(m => {
+          if (m.initBlueprintsTab) m.initBlueprintsTab();
+          if (m.loadBlueprints) m.loadBlueprints();
+          else if (m.default?.loadBlueprints) m.default.loadBlueprints();
+        });
       }
     });
   });

@@ -622,9 +622,25 @@ function initializeEventListeners() {
     const _overflowRes = el('overflow-research-btn');
     if (_overflowRes) _overflowRes.classList.remove('active');
     if (typeof updatePlusDot === 'function') updatePlusDot();
-    // Reset agent mode to Chat
-    const modeToggle = el('agent-mode-toggle');
-    if (modeToggle && modeToggle.checked) { modeToggle.checked = false; modeToggle.dispatchEvent(new Event('change')); }
+    // Preserve the user's current mode on new chat. Forcing Chat here also
+    // hides the mode-scoped tool buttons (shell/web), which makes a new chat
+    // look like those toggles disappeared.
+    try {
+      const ts = loadToggleState();
+      const mode = ts.mode || 'chat';
+      const ob = el('mode-orchestrator-btn');
+      const ab = el('mode-agent-btn');
+      const cb = el('mode-chat-btn');
+      if (ob) ob.classList.toggle('active', mode === 'orchestrator');
+      if (ab) ab.classList.toggle('active', mode === 'agent');
+      if (cb) cb.classList.toggle('active', mode === 'chat');
+      const mt = (cb || ab || ob)?.closest('.mode-toggle');
+      if (mt) {
+        mt.classList.toggle('mode-agent', mode === 'agent');
+        mt.classList.toggle('mode-chat', mode !== 'agent');
+      }
+      applyModeToToggles(mode);
+    } catch (_) {}
     // Clear character/persona
     if (presetsModule && presetsModule.deactivateCharacter) presetsModule.deactivateCharacter();
   }
@@ -1530,6 +1546,75 @@ function initializeEventListeners() {
     bash: 'Shell',
   };
 
+  let _orchestratorBpLoadInFlight = null;
+  let _orchestratorBpLoadedAt = 0;
+  const _ORCH_BP_TTL_MS = 15000;
+
+  function _normalizeBlueprintName(value) {
+    return String(value || '').trim().toLowerCase();
+  }
+
+  async function _ensureOrchestratorBlueprintOptions(force = false) {
+    const picker = el('orchestrator-blueprint-picker');
+    const select = el('orchestrator-blueprint-select');
+    if (!picker || !select) return;
+
+    const now = Date.now();
+    if (!force && (now - _orchestratorBpLoadedAt) < _ORCH_BP_TTL_MS && select.options.length > 1) {
+      return;
+    }
+    if (_orchestratorBpLoadInFlight) return _orchestratorBpLoadInFlight;
+
+    _orchestratorBpLoadInFlight = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/orchestrator/blueprints`, { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const rows = Array.isArray(data.blueprints) ? data.blueprints : [];
+        const st = loadToggleState();
+        const selected = _normalizeBlueprintName(st.orchestrator_blueprint || select.value);
+
+        select.innerHTML = '<option value="">Auto blueprint</option>';
+        rows
+          .sort((a, b) => String(a?.display_name || a?.name || '').localeCompare(String(b?.display_name || b?.name || '')))
+          .forEach((bp) => {
+            const name = _normalizeBlueprintName(bp?.name);
+            if (!name) return;
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = String(bp?.display_name || name);
+            select.appendChild(opt);
+          });
+
+        if (selected && Array.from(select.options).some((o) => o.value === selected)) {
+          select.value = selected;
+        } else {
+          select.value = '';
+        }
+        _orchestratorBpLoadedAt = Date.now();
+      } catch (_) {
+        // No-op: leave current options as-is.
+      } finally {
+        _orchestratorBpLoadInFlight = null;
+      }
+    })();
+
+    return _orchestratorBpLoadInFlight;
+  }
+
+  function _bindOrchestratorBlueprintPicker() {
+    const select = el('orchestrator-blueprint-select');
+    if (!select || select.dataset.bound) return;
+    select.dataset.bound = '1';
+    select.addEventListener('change', () => {
+      const st = loadToggleState();
+      const picked = _normalizeBlueprintName(select.value);
+      if (picked) st.orchestrator_blueprint = picked;
+      else delete st.orchestrator_blueprint;
+      saveToggleState(st);
+    });
+  }
+
   function showToolToggleToast(stateKey, active) {
     const label = TOOL_TOGGLE_TOAST_LABELS[stateKey];
     if (!label || !uiModule?.showToast) return;
@@ -1537,9 +1622,23 @@ function initializeEventListeners() {
   }
 
   function applyModeToToggles(mode) {
+    // Mode controls whether inline tool toggles are visible.
+    document.querySelectorAll('[data-mode-tool]').forEach((btn) => {
+      btn.style.display = mode === 'agent' ? '' : 'none';
+    });
+
+    const picker = el('orchestrator-blueprint-picker');
+    if (picker) {
+      picker.style.display = mode === 'orchestrator' ? '' : 'none';
+      if (mode === 'orchestrator') {
+        _bindOrchestratorBlueprintPicker();
+        _ensureOrchestratorBlueprintOptions(false);
+      }
+    }
+
     MODE_TOOLS.forEach(({ btnId, checkboxId, stateKey }) => {
       const btn = el(btnId);
-      if (!btn || btn.style.display === 'none') return;
+      if (!btn) return;
       const on = loadToolPref(stateKey, mode);
       btn.classList.toggle('active', on);
       if (checkboxId) { const chk = el(checkboxId); if (chk) chk.checked = on; }
@@ -1550,22 +1649,29 @@ function initializeEventListeners() {
   (function initModeToggle() {
     const agentBtn = el('mode-agent-btn');
     const chatBtn = el('mode-chat-btn');
-    if (!agentBtn || !chatBtn) return;
+    const orchestratorBtn = el('mode-orchestrator-btn');
+    if (!agentBtn || !chatBtn || !orchestratorBtn) return;
     const state = loadToggleState();
     let currentMode = state.mode || 'chat';
 
     function setMode(mode) {
+      if (!['agent', 'chat', 'orchestrator'].includes(mode)) mode = 'chat';
       currentMode = mode;
       const st = loadToggleState();
       st.mode = mode;
       saveToggleState(st);
       agentBtn.classList.toggle('active', mode === 'agent');
       chatBtn.classList.toggle('active', mode === 'chat');
+      orchestratorBtn.classList.toggle('active', mode === 'orchestrator');
       // Slide the pill to the active button
       const toggle = agentBtn.closest('.mode-toggle');
-      if (toggle) toggle.classList.toggle('mode-chat', mode === 'chat');
-      // Delay tool glow-up for a staggered effect
-      setTimeout(() => applyModeToToggles(mode), 500);
+      if (toggle) {
+        toggle.classList.toggle('mode-agent', mode === 'agent');
+        toggle.classList.toggle('mode-chat', mode === 'chat');
+      }
+      // Apply tool visibility/state immediately so mode switches never leave
+      // web/shell toggles stuck hidden after New Chat or direct mode clicks.
+      applyModeToToggles(mode);
     }
     agentBtn.addEventListener('click', () => {
       // Agent mode turns off research if active
@@ -1574,6 +1680,7 @@ function initializeEventListeners() {
       setMode('agent');
     });
     chatBtn.addEventListener('click', () => setMode('chat'));
+    orchestratorBtn.addEventListener('click', () => setMode('orchestrator'));
     setMode(currentMode);
   })();
 
@@ -1896,9 +2003,15 @@ function initializeEventListeners() {
           if (rs.mode === 'agent') {
             rs.mode = 'chat';
             saveToggleState(rs);
-            const ab = el('mode-agent-btn'), cb = el('mode-chat-btn');
+            const ab = el('mode-agent-btn'), cb = el('mode-chat-btn'), ob = el('mode-orchestrator-btn');
             if (ab) ab.classList.remove('active');
             if (cb) cb.classList.add('active');
+            if (ob) ob.classList.remove('active');
+            const mt = cb ? cb.closest('.mode-toggle') : null;
+            if (mt) {
+              mt.classList.remove('mode-agent');
+              mt.classList.add('mode-chat');
+            }
             applyModeToToggles('chat');
           }
         }
@@ -2148,9 +2261,15 @@ function initializeEventListeners() {
         if (rs2.mode === 'agent') {
           rs2.mode = 'chat';
           saveToggleState(rs2);
-          const ab2 = el('mode-agent-btn'), cb2 = el('mode-chat-btn');
+          const ab2 = el('mode-agent-btn'), cb2 = el('mode-chat-btn'), ob2 = el('mode-orchestrator-btn');
           if (ab2) ab2.classList.remove('active');
           if (cb2) cb2.classList.add('active');
+          if (ob2) ob2.classList.remove('active');
+          const mt2 = cb2 ? cb2.closest('.mode-toggle') : null;
+          if (mt2) {
+            mt2.classList.remove('mode-agent');
+            mt2.classList.add('mode-chat');
+          }
           applyModeToToggles('chat');
         }
       }
@@ -2254,12 +2373,18 @@ function initializeEventListeners() {
         const _offIds = ['web-toggle', 'bash-toggle', 'research-toggle'];
         _offIds.forEach(id => { const c = el(id); if (c) c.checked = false; });
         ['web-toggle-btn', 'bash-toggle-btn'].forEach(id => { const b = el(id); if (b) b.classList.remove('active'); });
-        const _ab = el('mode-agent-btn'), _cb = el('mode-chat-btn');
+        const _ab = el('mode-agent-btn'), _cb = el('mode-chat-btn'), _ob = el('mode-orchestrator-btn');
         if (_ab) _ab.classList.remove('active');
         if (_cb) _cb.classList.add('active');
+        if (_ob) _ob.classList.remove('active');
         const ts = Storage.getJSON(Storage.KEYS.TOGGLES, {});
         ts.research = false; ts.mode = 'chat';
         Storage.setJSON(Storage.KEYS.TOGGLES, ts);
+        const _mt = _cb ? _cb.closest('.mode-toggle') : null;
+        if (_mt) {
+          _mt.classList.remove('mode-agent');
+          _mt.classList.add('mode-chat');
+        }
       } else {
         incognitoBtn.innerHTML = INCOGNITO_EYE_OPEN + '<span class="incognito-label">Nobody</span>';
         if (welcomeName && welcomeName.dataset.originalHtml) {
