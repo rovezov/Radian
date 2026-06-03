@@ -1,5 +1,6 @@
 import os
 import logging
+import uuid
 from datetime import datetime
 from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer, ForeignKey, JSON, Index, func, text
 from sqlalchemy.types import TypeDecorator
@@ -590,6 +591,33 @@ class TaskRun(Base):
 
     __table_args__ = (
         Index('ix_task_runs_task', 'task_id', 'started_at'),
+    )
+
+
+class OrchestratorRun(Base):
+    """Record of a queued/executing orchestrator plan run."""
+    __tablename__ = "orchestrator_runs"
+
+    id = Column(String, primary_key=True, index=True, default=lambda: uuid.uuid4().hex)
+    owner = Column(String, nullable=True, index=True)
+    session_id = Column(String, ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    plan_json = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="queued")
+    current_step_index = Column(Integer, nullable=False, default=0)
+
+    results_json = Column(Text, nullable=True)
+    final_output = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    session = relationship("Session", backref=backref("orchestrator_runs", cascade="save-update, merge"))
+
+    __table_args__ = (
+        Index("ix_orchestrator_runs_owner_status", "owner", "status"),
+        Index("ix_orchestrator_runs_status_created", "status", "created_at"),
     )
 
 
@@ -1483,6 +1511,51 @@ def _migrate_seed_email_account():
         logging.getLogger(__name__).warning(f"seed email account migration: {e}")
 
 
+def _migrate_add_orchestrator_runs_table():
+    """Ensure orchestrator_runs exists on legacy SQLite DBs.
+
+    Base.metadata.create_all creates this table for new installs; this helper
+    keeps startup migrations explicit and idempotent for existing deployments.
+    """
+    import sqlite3
+
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orchestrator_runs (
+                id TEXT PRIMARY KEY,
+                owner TEXT,
+                session_id TEXT,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                plan_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                current_step_index INTEGER NOT NULL DEFAULT 0,
+                results_json TEXT,
+                final_output TEXT,
+                error_message TEXT,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_orchestrator_runs_owner_status "
+            "ON orchestrator_runs(owner, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_orchestrator_runs_status_created "
+            "ON orchestrator_runs(status, created_at)"
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"orchestrator_runs migration failed: {e}")
+
+
 def init_db():
     """
     Initialize the database by creating all tables.
@@ -1523,6 +1596,7 @@ def init_db():
     _migrate_encrypt_email_passwords()
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
+    _migrate_add_orchestrator_runs_table()
 
 
 def _migrate_encrypt_endpoint_keys():

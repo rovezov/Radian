@@ -47,9 +47,17 @@ export function handleUIControl(uiData) {
       var modeVal = uiData.mode;
       var agentBtn = document.getElementById('mode-agent-btn');
       var chatBtn = document.getElementById('mode-chat-btn');
-      if (agentBtn && chatBtn) {
+      var orchestratorBtn = document.getElementById('mode-orchestrator-btn');
+      if (agentBtn && chatBtn && orchestratorBtn) {
+        if (modeVal !== 'agent' && modeVal !== 'chat' && modeVal !== 'orchestrator') modeVal = 'chat';
         agentBtn.classList.toggle('active', modeVal === 'agent');
-        chatBtn.classList.toggle('active', modeVal !== 'agent');
+        chatBtn.classList.toggle('active', modeVal === 'chat');
+        orchestratorBtn.classList.toggle('active', modeVal === 'orchestrator');
+        var toggle = agentBtn.closest('.mode-toggle');
+        if (toggle) {
+          toggle.classList.toggle('mode-agent', modeVal === 'agent');
+          toggle.classList.toggle('mode-chat', modeVal === 'chat');
+        }
       }
       var ts2 = Storage.getJSON(Storage.KEYS.TOGGLES, {});
       ts2.mode = modeVal;

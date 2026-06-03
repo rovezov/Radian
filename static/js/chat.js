@@ -19,6 +19,7 @@ import searchModule from './search.js';
 import documentModule from './document.js';
 import * as emailInbox from './emailInbox.js';
 import codeRunnerModule from './codeRunner.js';
+import { enhanceOrchestratorPlanCards } from './orchestratorPlanCard.js';
 import slashCommands, { initSlashCommands, isCommand, handleSlashCommand, handleSetupInput, handleSetupWizard, typewriterInto } from './slashCommands.js';
 import createResearchSynapse from './researchSynapse.js';
   const RESEARCH_TIMEOUT_MS = 360000;
@@ -730,13 +731,21 @@ import createResearchSynapse from './researchSynapse.js';
       }
       // Web toggle: pre-search in Chat mode, tool permission in Agent mode
       const toggleState = Storage.loadToggleState();
-      let isAgentMode = (toggleState.mode || 'chat') === 'agent';
+      let selectedMode = toggleState.mode || 'chat';
+      if (!['agent', 'chat', 'orchestrator'].includes(selectedMode)) selectedMode = 'chat';
+      let isAgentMode = selectedMode === 'agent';
       // Auto-escalate to agent mode when a document is open — the user expects
       // the AI to see the document and have tools to edit it
-      if (!isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
+      if (selectedMode === 'chat' && !isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
         isAgentMode = true;
+        selectedMode = 'agent';
       }
-      fd.append('mode', isAgentMode ? 'agent' : 'chat');
+      fd.append('mode', selectedMode);
+      if (selectedMode === 'orchestrator') {
+        const bpSelect = document.getElementById('orchestrator-blueprint-select');
+        const chosenBlueprint = String(bpSelect?.value || '').trim();
+        if (chosenBlueprint) fd.append('orchestrator_blueprint', chosenBlueprint);
+      }
       if (el('web-toggle').checked) {
         if (isAgentMode) {
           fd.append('allow_web_search', 'true');
@@ -769,8 +778,7 @@ import createResearchSynapse from './researchSynapse.js';
       abortCtrl._reason = '';
       currentAbort = abortCtrl;
 
-      const _tState = Storage.loadToggleState();
-      const _isAgent = (_tState.mode || 'chat') === 'agent';
+      const _isAgent = selectedMode === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -935,11 +943,16 @@ import createResearchSynapse from './researchSynapse.js';
           errText = 'This model doesn\'t support agent tools — switched to Chat mode. Try again.';
           const _ab = document.getElementById('mode-agent-btn');
           const _cb = document.getElementById('mode-chat-btn');
+          const _ob = document.getElementById('mode-orchestrator-btn');
           if (_ab && _cb) {
             _ab.classList.remove('active');
             _cb.classList.add('active');
+            if (_ob) _ob.classList.remove('active');
             const _toggle = _ab.closest('.mode-toggle');
-            if (_toggle) _toggle.classList.add('mode-chat');
+            if (_toggle) {
+              _toggle.classList.remove('mode-agent');
+              _toggle.classList.add('mode-chat');
+            }
           }
           if (typeof Storage !== 'undefined' && Storage.KEYS) {
             const _st = Storage.getJSON(Storage.KEYS.TOGGLES, {});
@@ -1134,6 +1147,7 @@ import createResearchSynapse from './researchSynapse.js';
             const replyHtml = markdownModule.mdToHtml(markdownModule.squashOutsideCode(replyTrimmed));
             const prevLen = liveReply._prevTextLen || 0;
             liveReply.innerHTML = replyHtml;
+            enhanceOrchestratorPlanCards(liveReply);
             _fadeNewTokens(liveReply, prevLen);
             liveReply._prevTextLen = liveReply.textContent.length;
             if (window.hljs) liveReply.querySelectorAll('pre code').forEach((b) => window.hljs.highlightElement(b));
@@ -1182,6 +1196,7 @@ import createResearchSynapse from './researchSynapse.js';
         }
 
         contentEl.innerHTML = html;
+        enhanceOrchestratorPlanCards(contentEl);
         _fadeNewTokens(contentEl, prevLen);
         contentEl._prevTextLen = contentEl.textContent.length;
         if (window.hljs) contentEl.querySelectorAll('pre code').forEach((b) => window.hljs.highlightElement(b));
@@ -1880,6 +1895,7 @@ import createResearchSynapse from './researchSynapse.js';
                     var _contentEl3 = _ensureStreamLayout(_body3);
                     _contentEl3.style.minHeight = '';  // clear streaming inflate
                     _contentEl3.innerHTML = markdownModule.processWithThinking(markdownModule.squashOutsideCode(dt));
+                    enhanceOrchestratorPlanCards(_contentEl3);
                     if (window.hljs) roundHolder.querySelectorAll('pre code').forEach((b) => window.hljs.highlightElement(b));
                   } else {
                     roundHolder.style.display = 'none';
@@ -2335,6 +2351,7 @@ import createResearchSynapse from './researchSynapse.js';
             // Render reply into the live-reply container (thinking bar already showing)
             var _replyHtml = markdownModule.mdToHtml(markdownModule.squashOutsideCode(_finalReply));
             _liveReplyEl.innerHTML = _replyHtml;
+            enhanceOrchestratorPlanCards(_liveReplyEl);
             _liveReplyEl.classList.remove('live-reply-content');
             if (_sourcesData) {
               var _srcEl = document.createElement('div');
@@ -2347,6 +2364,7 @@ import createResearchSynapse from './researchSynapse.js';
             _body4.innerHTML = (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, _wasExpanded) : '')
               + markdownModule.processWithThinking(markdownModule.squashOutsideCode(finalDisplay))
               + (_findingsData ? chatRenderer.buildFindingsBox(_findingsData) : '');
+            enhanceOrchestratorPlanCards(_body4);
           }
         } else if (_sourcesHtml) {
           var _body4b = roundHolder.querySelector('.body');

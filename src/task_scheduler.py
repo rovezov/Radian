@@ -222,6 +222,7 @@ class TaskScheduler:
         # This is a hard guarantee, not configurable.
         self._run_semaphore = asyncio.Semaphore(1)
         self._concurrency_cap = 1
+        self._orchestrator_executing = False
 
     def add_notification(self, task_name: str, status: str, task_id: str = None, owner: str = None, body: str = None):
         """Store a notification about a completed task run. Tagged with the
@@ -271,7 +272,7 @@ class TaskScheduler:
         # this, a server crash leaves rows stuck running indefinitely and the
         # _executing in-memory set forgets them, so the UI shows phantoms.
         try:
-            from core.database import SessionLocal, TaskRun
+            from core.database import OrchestratorRun, SessionLocal, TaskRun
             db = SessionLocal()
             try:
                 # Zombies from a prior server crash. Tagged "aborted" (not
@@ -289,6 +290,18 @@ class TaskScheduler:
                         r.finished_at = now
                     db.commit()
                     logger.info(f"Cleared {len(stale)} stale task_runs from previous run")
+
+                stale_orchestrator = db.query(OrchestratorRun).filter(
+                    OrchestratorRun.status == "running"
+                ).all()
+                if stale_orchestrator:
+                    now = datetime.utcnow()
+                    for r in stale_orchestrator:
+                        r.status = "failed"
+                        r.error_message = "Server restarted while orchestrator run was running"
+                        r.updated_at = now
+                    db.commit()
+                    logger.info(f"Cleared {len(stale_orchestrator)} stale orchestrator_runs from previous run")
             finally:
                 db.close()
         except Exception as e:
@@ -462,6 +475,7 @@ class TaskScheduler:
         while self._running:
             try:
                 await self._check_due_tasks()
+                await self._check_due_orchestrator_runs()
             except Exception:
                 logger.exception("Error in task scheduler loop")
             # Sleep until the next scheduled run, capped at 60s. A `* * * * *`
@@ -484,6 +498,64 @@ class TaskScheduler:
             except Exception:
                 pass
             await asyncio.sleep(sleep_for)
+
+    async def _check_due_orchestrator_runs(self):
+        """Claim and dispatch the oldest queued orchestrator run.
+
+        Keep one orchestrator runner active at a time and share the same
+        semaphore used by scheduled tasks.
+        """
+        if self._orchestrator_executing:
+            return
+
+        from core.database import OrchestratorRun, SessionLocal
+
+        db = SessionLocal()
+        try:
+            next_row = db.query(OrchestratorRun.id).filter(
+                OrchestratorRun.status == "queued"
+            ).order_by(OrchestratorRun.created_at.asc()).first()
+            if not next_row:
+                return
+
+            run_id = next_row[0]
+            updated = db.query(OrchestratorRun).filter(
+                OrchestratorRun.id == run_id,
+                OrchestratorRun.status == "queued",
+            ).update(
+                {"status": "running", "updated_at": datetime.utcnow()},
+                synchronize_session=False,
+            )
+            db.commit()
+            if not updated:
+                return
+
+            self._orchestrator_executing = True
+            asyncio.create_task(self._execute_orchestrator_run(run_id))
+        finally:
+            db.close()
+
+    async def _execute_orchestrator_run(self, run_id: str):
+        from core.database import OrchestratorRun, SessionLocal
+
+        try:
+            async with self._run_semaphore:
+                from src.orchestrator.engine import execute_orchestrator_run
+                await execute_orchestrator_run(run_id)
+        except Exception as e:
+            logger.exception("Orchestrator run failed: %s", run_id)
+            db = SessionLocal()
+            try:
+                run = db.query(OrchestratorRun).filter(OrchestratorRun.id == run_id).first()
+                if run and run.status not in ("completed", "cancelled"):
+                    run.status = "failed"
+                    run.error_message = str(e)
+                    run.updated_at = datetime.utcnow()
+                    db.commit()
+            finally:
+                db.close()
+        finally:
+            self._orchestrator_executing = False
 
     async def _check_due_tasks(self):
         from core.database import SessionLocal, ScheduledTask

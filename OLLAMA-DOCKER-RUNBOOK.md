@@ -117,3 +117,10 @@ docker compose logs -f radian
 ```
 
 If containers fail after script edits on Windows, ensure shell scripts in `docker/` use LF line endings (not CRLF).
+
+
+
+Builds and reruns docker:
+```powershell
+docker compose down; docker compose up -d --build; docker compose ps
+```

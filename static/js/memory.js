@@ -1353,6 +1353,30 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Planner modal tab switching
+  document.querySelectorAll('.memory-tab[data-planner-tab]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.plannerTab;
+      document.querySelectorAll('[data-planner-tab]').forEach(t => t.classList.toggle('active', t === tab));
+      document.querySelectorAll('[data-planner-panel]').forEach(p => {
+        p.classList.toggle('hidden', p.dataset.plannerPanel !== target);
+      });
+      if (target === 'blueprints') {
+        import('./blueprints.js').then(m => {
+          if (m.initBlueprintsTab) m.initBlueprintsTab();
+          if (m.loadBlueprints) m.loadBlueprints();
+          else if (m.default?.loadBlueprints) m.default.loadBlueprints();
+        });
+      } else if (target === 'node-types') {
+        import('./nodeTypes.js').then(m => {
+          if (m.initNodeTypesTab) m.initNodeTypesTab();
+          if (m.loadNodeTypes) m.loadNodeTypes();
+          else if (m.default?.loadNodeTypes) m.default.loadNodeTypes();
+        });
+      }
+    });
+  });
+
   const sortSelect = document.getElementById('memory-sort');
   if (sortSelect) {
     sortSelect.addEventListener('change', () => {
