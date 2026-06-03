@@ -10,14 +10,12 @@ from pydantic import BaseModel, Field
 class QualityCheck(BaseModel):
     """How a node output is validated before we move to the next node."""
 
-    type: Literal["llm_eval", "script", "none"] = "llm_eval"
+    type: Literal["llm_eval", "script", "none"] = "none"
     criteria: str = ""
 
 
 class NodeType(str, Enum):
     execute = "execute"   # run tools/LLM to produce output
-    reflect = "reflect"   # evaluate prior execute node output for pass/fail
-    format = "format"     # synthesize accumulated context into final report
     branch = "branch"     # routing-only node, no execution
 
 
