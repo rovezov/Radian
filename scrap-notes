@@ -1,0 +1,100 @@
+{
+  "name": "basic-plan-qa",
+  "display_name": "Basic Task QA",
+  "description": "A basic template for simple tasks with QA",
+  "nodes": [
+    {
+      "node_id": "node_a655d115",
+      "node_type": "execute",
+      "node_type_ref": "nt_7f0f72e2",
+      "title": "Reframe Objective",
+      "description": "Understand the goal, assumptions, constraints, and challenges.",
+      "tools": [
+        "read_file"
+      ],
+      "model": "",
+      "inputs": {},
+      "quality_check": {
+        "type": "llm_eval",
+        "criteria": ""
+      }
+    },
+    {
+      "node_id": "node_30969cfa",
+      "node_type": "execute",
+      "node_type_ref": "nt_78229e33",
+      "title": "Execute",
+      "description": "Execute the task given the reframed context.",
+      "tools": [
+        "read_file"
+      ],
+      "model": "",
+      "inputs": {},
+      "quality_check": {
+        "type": "llm_eval",
+        "criteria": ""
+      }
+    },
+    {
+      "node_id": "node_388e08c9",
+      "node_type": "branch",
+      "node_type_ref": "nt_3a875adc",
+      "title": "Quality Check",
+      "description": "Checks the quality of the output",
+      "tools": [],
+      "model": "",
+      "inputs": {},
+      "quality_check": {
+        "type": "llm_eval",
+        "criteria": "PASS if the execution output meets the stated objectives"
+      }
+    },
+    {
+      "node_id": "node_3d6ff046",
+      "node_type": "execute",
+      "node_type_ref": "nt_c3b1a374",
+      "title": "Format final report",
+      "description": "Synthesize all context into a polished final report.",
+      "tools": [
+        "read_file"
+      ],
+      "model": "",
+      "inputs": {},
+      "quality_check": {
+        "type": "llm_eval",
+        "criteria": ""
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "edge_8428344a",
+      "from_node": "node_a655d115",
+      "to_node": "node_30969cfa",
+      "condition": "default",
+      "max_traversals": 3
+    },
+    {
+      "edge_id": "edge_589709d8",
+      "from_node": "node_30969cfa",
+      "to_node": "node_3d6ff046",
+      "condition": "on_pass",
+      "max_traversals": 1
+    },
+    {
+      "edge_id": "edge_b18edb64",
+      "from_node": "node_30969cfa",
+      "to_node": "node_a655d115",
+      "condition": "on_fail",
+      "max_traversals": 2
+    },
+    {
+      "edge_id": "edge_1fd42208",
+      "from_node": "node_388e08c9",
+      "to_node": "node_30969cfa",
+      "condition": "on_fail",
+      "max_traversals": 3
+    }
+  ],
+  "source": "custom"
+}

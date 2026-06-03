@@ -498,6 +498,7 @@ function initializeEventListeners() {
         'rename-ai-modal': null,
         'custom-preset-modal': null,
         'memory-modal': null,
+        'planner-modal': null,
       };
 
       // Dynamic modals (removed from DOM on close)
@@ -1403,6 +1404,33 @@ function initializeEventListeners() {
   // Memory management
   const memoryModal = el('memory-modal');
   const closeMemoryBtn = el('close-memory-modal');
+
+  // Planner modal
+  const plannerModal = el('planner-modal');
+  const closePlannerBtn = el('close-planner-modal');
+  if (closePlannerBtn && plannerModal) {
+    closePlannerBtn.addEventListener('click', () => { dismissModal(plannerModal); });
+  }
+  const toolPlannerBtn = el('tool-planner-btn');
+  if (toolPlannerBtn && plannerModal) {
+    toolPlannerBtn.addEventListener('click', () => {
+      plannerModal.classList.remove('hidden');
+      // Trigger lazy-load of the active tab (blueprints is default)
+      const activeTab = plannerModal.querySelector('.memory-tab.active[data-planner-tab]');
+      const tabName = activeTab?.dataset?.plannerTab || 'blueprints';
+      if (tabName === 'blueprints') {
+        import('./blueprints.js').then(m => {
+          if (m.initBlueprintsTab) m.initBlueprintsTab();
+          if (m.loadBlueprints) m.loadBlueprints();
+        });
+      } else if (tabName === 'node-types') {
+        import('./nodeTypes.js').then(m => {
+          if (m.initNodeTypesTab) m.initNodeTypesTab();
+          if (m.loadNodeTypes) m.loadNodeTypes();
+        });
+      }
+    });
+  }
 
   // Theme popup close button
   const closeThemeBtn = el('close-theme-popup');

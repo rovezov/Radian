@@ -9534,14 +9534,27 @@ details a:hover {
   margin-top: 0 !important;
   min-width: 220px;
 }
-.memory-tab-panel[data-memory-panel="blueprints"] .admin-card {
+.memory-tab-panel[data-memory-panel="blueprints"] .admin-card,
+.memory-tab-panel[data-planner-panel="blueprints"] .admin-card,
+.memory-tab-panel[data-planner-panel="node-types"] .admin-card {
   min-height: 0;
+}
+/* Planner modal needs a definite height (not just max-height) so the
+   blueprint-layout flex chain creates a bounded container for the
+   list pane to scroll within rather than expanding the modal. */
+#planner-modal .memory-modal-content {
+  height: 78vh;
 }
 .blueprint-layout {
   min-height: 0;
   overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
 }
-.blueprint-list-pane,
+.blueprint-list-pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .blueprint-editor-pane {
   min-height: 0;
 }

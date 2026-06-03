@@ -1711,9 +1711,9 @@ function _renderOrchestratorRunDetails(run) {
     return '<div class="memory-empty" style="padding:24px 8px;">Select a run to view full details.</div>';
   }
   const plan = run.plan || {};
-  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const steps = Array.isArray(plan.nodes) ? plan.nodes : [];
   const results = Array.isArray(run.results) ? run.results : [];
-  const resultByStepId = new Map(results.map((r) => [r.step_id, r]));
+  const resultByNodeId = new Map(results.map((r) => [r.node_id, r]));
   const started = run.created_at ? _absoluteTime(run.created_at) : '—';
   const updated = run.updated_at ? _absoluteTime(run.updated_at) : '—';
   const completedCount = results.filter((r) => r.status === 'passed').length;
@@ -1775,8 +1775,8 @@ function _renderOrchestratorRunDetails(run) {
   } else {
     html += '<div style="display:flex;flex-direction:column;gap:8px;margin-top:6px;">';
     steps.forEach((step, i) => {
-      const stepId = step.step_id;
-      const result = resultByStepId.get(stepId);
+      const nodeId = step.node_id;
+      const result = resultByNodeId.get(nodeId);
       const stepStatus = result?.status || (i < Number(run.current_step_index || 0) ? 'passed' : (run.status === 'running' && i === Number(run.current_step_index || 0) ? 'running' : 'pending'));
       const tools = Array.isArray(step.tools) ? step.tools : [];
       const model = String(step.model || '').trim() || 'auto';

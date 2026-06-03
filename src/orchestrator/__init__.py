@@ -3,17 +3,27 @@
 from .schemas import (
     DispatchRequest,
     DispatchResponse,
+    EdgeCondition,
     ExecutionPlan,
-    PlanStep,
+    GraphEdge,
+    GraphNode,
+    NodeResult,
+    NodeType,
+    NodeTypeDef,
     QualityCheck,
-    StepResult,
+    StepResult,  # backward-compat alias for NodeResult
 )
 
 __all__ = [
-    "QualityCheck",
-    "PlanStep",
-    "ExecutionPlan",
-    "StepResult",
     "DispatchRequest",
     "DispatchResponse",
+    "EdgeCondition",
+    "ExecutionPlan",
+    "GraphEdge",
+    "GraphNode",
+    "NodeResult",
+    "NodeType",
+    "NodeTypeDef",
+    "QualityCheck",
+    "StepResult",
 ]

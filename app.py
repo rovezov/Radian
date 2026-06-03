@@ -522,6 +522,9 @@ app.include_router(setup_task_routes(task_scheduler))
 from routes.orchestrator_routes import setup_orchestrator_routes
 app.include_router(setup_orchestrator_routes())
 
+from routes.node_type_routes import setup_node_type_routes
+app.include_router(setup_node_type_routes())
+
 from routes.assistant_routes import setup_assistant_routes
 app.include_router(setup_assistant_routes(task_scheduler))
 

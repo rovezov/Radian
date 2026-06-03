@@ -30,7 +30,9 @@ def _run_to_dict(run: OrchestratorRun) -> dict[str, Any]:
         "plan_id": plan_raw.get("plan_id"),
         "blueprint_type": plan_raw.get("blueprint_type"),
         "objective": plan_raw.get("objective"),
-        "steps": plan_raw.get("steps") if isinstance(plan_raw.get("steps"), list) else [],
+        "entry_node": plan_raw.get("entry_node", ""),
+        "nodes": plan_raw.get("nodes") if isinstance(plan_raw.get("nodes"), list) else [],
+        "edges": plan_raw.get("edges") if isinstance(plan_raw.get("edges"), list) else [],
     }
     return {
         "id": run.id,

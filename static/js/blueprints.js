@@ -3,25 +3,70 @@ const API_BASE = window.location.origin;
 let _blueprints = [];
 let _selectedName = '';
 let _stepsModalDraft = null;
+let _cachedNodeTypes = [];  // from nodeTypes.js
+let _cachedTools = null;    // null = not yet fetched; string[]
 
-const TOOL_OPTIONS = [
-  'web_search',
-  'trigger_research',
-  'manage_research',
-  'deep_research',
-  'read_file',
-  'write_file',
-  'bash',
-  'python',
-  'manage_notes',
-  'manage_memory',
-  'list_sessions',
-  'manage_calendar',
-  'read_email',
-  'list_emails',
-];
+async function _fetchToolPool() {
+  if (_cachedTools !== null) return;
+  _cachedTools = [];
+  try {
+    const res = await fetch(`${API_BASE}/api/tools`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    _cachedTools = (data.tools || []).map(t => t.id || t).filter(Boolean).sort();
+  } catch (e) {
+    console.warn('blueprints: failed to load tools', e);
+  }
+}
 
+const NODE_TYPE_OPTIONS = ['execute', 'reflect', 'format', 'branch'];
 const QUALITY_OPTIONS = ['llm_eval', 'script', 'none'];
+const EDGE_CONDITION_OPTIONS = ['default', 'on_pass', 'on_fail'];
+
+async function _fetchNodeTypePool() {
+  try {
+    const res = await fetch(`${API_BASE}/api/node-types`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    _cachedNodeTypes = Array.isArray(data.node_types) ? data.node_types : [];
+  } catch (e) {
+    console.warn('blueprints: failed to load node types', e);
+  }
+}
+
+let _cachedModels = []; // [{ endpoint_name: string, models: string[] }]
+
+async function _fetchModels() {
+  if (_cachedModels.length > 0) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/models`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const items = (data.items || []).filter(it => (it.model_type || 'llm') === 'llm' && !it.offline);
+    _cachedModels = items.map(it => ({
+      endpoint_name: it.endpoint_name || it.host || 'endpoint',
+      models: [...(it.models || []), ...(it.models_extra || [])].filter(Boolean),
+    })).filter(g => g.models.length > 0);
+  } catch (e) {
+    console.warn('Blueprint editor: failed to load models', e);
+  }
+}
+
+function _buildModelOptionsHtml(selected) {
+  let html = `<option value="">(session default)</option>`;
+  for (const grp of _cachedModels) {
+    html += `<optgroup label="${_esc(grp.endpoint_name)}">` ;
+    for (const m of grp.models) {
+      html += `<option value="${_esc(m)}"${m === selected ? ' selected' : ''}>${_esc(m)}</option>`;
+    }
+    html += `</optgroup>`;
+  }
+  const listed = _cachedModels.flatMap(g => g.models);
+  if (selected && !listed.includes(selected)) {
+    html += `<option value="${_esc(selected)}" selected>${_esc(selected)}</option>`;
+  }
+  return html;
+}
 
 function _el(id) {
   return document.getElementById(id);
@@ -35,33 +80,45 @@ function _showStatus(text, isError = false) {
   el.style.color = isError ? 'var(--error,#ff6b6b)' : '';
 }
 
-function _parseStepsJson() {
+function _parseNodesJson() {
   const raw = (_el('blueprint-steps-json')?.value || '').trim();
   let parsed;
   try {
     parsed = JSON.parse(raw || '[]');
   } catch (e) {
-    throw new Error(`Steps JSON parse failed: ${e.message || e}`);
+    throw new Error(`Nodes JSON parse failed: ${e.message || e}`);
   }
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error('Steps must be a non-empty JSON array');
+    throw new Error('Nodes must be a non-empty JSON array');
   }
   for (let i = 0; i < parsed.length; i++) {
     const s = parsed[i] || {};
     if (typeof s !== 'object' || Array.isArray(s)) {
-      throw new Error(`Step ${i + 1} must be an object`);
+      throw new Error(`Node ${i + 1} must be an object`);
     }
     if (!String(s.title || '').trim()) {
-      throw new Error(`Step ${i + 1} is missing title`);
+      throw new Error(`Node ${i + 1} is missing title`);
     }
     if (!String(s.description || '').trim()) {
-      throw new Error(`Step ${i + 1} is missing description`);
+      throw new Error(`Node ${i + 1} is missing description`);
     }
     if (s.tools != null && !Array.isArray(s.tools)) {
-      throw new Error(`Step ${i + 1} tools must be an array`);
+      throw new Error(`Node ${i + 1} tools must be an array`);
     }
   }
   return parsed;
+}
+
+function _parseEdgesJson() {
+  const raw = (_el('blueprint-edges-json')?.value || '').trim();
+  if (!raw || raw === '[]') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('must be an array');
+    return parsed;
+  } catch (e) {
+    throw new Error(`Edges JSON parse failed: ${e.message || e}`);
+  }
 }
 
 function _modalStatus(text, isError = false) {
@@ -95,89 +152,129 @@ function _normalizeName(value) {
     .replace(/^-|-$/g, '');
 }
 
-function _newStepId() {
-  return `step_${Math.random().toString(16).slice(2, 10)}`;
+function _newNodeId() {
+  return `node_${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function _normalizeStep(raw, index = 0) {
+function _normalizeNode(raw, index = 0, edges = []) {
   const source = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
   const qcSource = (source.quality_check && typeof source.quality_check === 'object' && !Array.isArray(source.quality_check))
     ? source.quality_check
     : {};
   const qcType = QUALITY_OPTIONS.includes(String(qcSource.type || '').trim()) ? String(qcSource.type).trim() : 'llm_eval';
-  const retriesNum = Number.isFinite(Number(source.max_retries)) ? Number(source.max_retries) : 2;
-  let inputsObj = {};
-  if (source.inputs && typeof source.inputs === 'object' && !Array.isArray(source.inputs)) {
-    inputsObj = source.inputs;
+  const nodeType = NODE_TYPE_OPTIONS.includes(String(source.node_type || '').trim()) ? String(source.node_type).trim() : 'execute';
+  const nodeId = String(source.node_id || _newNodeId()).trim() || _newNodeId();
+  const isBranch = nodeType === 'branch';
+  // Derive on_fail routing from edge list
+  let onFailTarget = '';
+  let maxTraversals = 3;
+  if (isBranch && edges.length > 0) {
+    const onFailEdge = edges.find(e => e.from_node === nodeId && e.condition === 'on_fail');
+    if (onFailEdge) {
+      onFailTarget = String(onFailEdge.to_node || '');
+      maxTraversals = Number(onFailEdge.max_traversals ?? 3);
+    }
   }
   return {
-    step_id: String(source.step_id || _newStepId()).trim() || _newStepId(),
-    title: String(source.title || `Step ${index + 1}`).trim(),
+    node_id: nodeId,
+    node_type_ref: String(source.node_type_ref || '').trim() || null,
+    node_type: nodeType,
+    title: String(source.title || `Node ${index + 1}`).trim(),
     description: String(source.description || '').trim(),
     tools: Array.isArray(source.tools) ? source.tools.map((x) => String(x || '').trim()).filter(Boolean) : [],
     model: String(source.model || '').trim(),
-    inputs: inputsObj,
-    _inputsText: JSON.stringify(inputsObj, null, 2),
-    quality_check: {
-      type: qcType,
-      criteria: String(qcSource.criteria || '').trim(),
-    },
-    max_retries: Math.max(0, Math.floor(retriesNum || 0)),
-    depends_on: Array.isArray(source.depends_on)
-      ? source.depends_on.map((x) => String(x || '').trim()).filter(Boolean)
-      : [],
+    quality_check: { type: qcType, criteria: String(qcSource.criteria || '').trim() },
+    _onFailTarget: onFailTarget,
+    _maxTraversals: maxTraversals,
   };
 }
 
-function _stepsSummaryHtml() {
+function _nodesSummaryHtml() {
   let parsed = [];
   try {
-    parsed = _parseStepsJson();
+    parsed = _parseNodesJson();
   } catch {
-    return '<div class="blueprint-steps-summary-empty">Steps JSON is invalid. Open Edit Steps to repair.</div>';
+    return '<div class="blueprint-steps-summary-empty">Nodes JSON is invalid. Open Edit Nodes to repair.</div>';
   }
   if (!parsed.length) {
-    return '<div class="blueprint-steps-summary-empty">No steps configured yet.</div>';
+    return '<div class="blueprint-steps-summary-empty">No nodes configured yet.</div>';
   }
   const lines = parsed.map((s, i) => {
-    const title = String(s?.title || `Step ${i + 1}`).trim();
-    return `<li>${_esc(title)}</li>`;
+    const title = String(s?.title || `Node ${i + 1}`).trim();
+    const type = String(s?.node_type || 'execute').trim();
+    return `<li>${_esc(title)} <span class="orchestrator-plan-node-type">${_esc(type)}</span></li>`;
   }).join('');
-  return `<div><strong>${parsed.length}</strong> step(s)</div><ol class="blueprint-steps-summary-list">${lines}</ol>`;
+  return `<div><strong>${parsed.length}</strong> node(s)</div><ol class="blueprint-steps-summary-list">${lines}</ol>`;
 }
 
 function _renderStepsSummary() {
   const box = _el('blueprint-steps-summary');
   if (!box) return;
-  box.innerHTML = _stepsSummaryHtml();
+  box.innerHTML = _nodesSummaryHtml();
 }
 
-function _buildStepCard(step, index) {
-  const knownTools = new Set(TOOL_OPTIONS);
-  const selectedKnown = (step.tools || []).filter((t) => knownTools.has(String(t).trim()));
-  const customTools = (step.tools || []).filter((t) => !knownTools.has(String(t).trim()));
-  const allToolOptions = [...TOOL_OPTIONS, ...customTools.filter(Boolean)];
-  const optionsHtml = allToolOptions.map((tool) => {
-    const selected = selectedKnown.includes(tool) ? ' selected' : '';
-    return `<option value="${_esc(tool)}"${selected}>${_esc(tool)}</option>`;
-  }).join('');
+function _buildNodeTypePickerOptions(selectedRef) {
+  if (!_cachedNodeTypes.length) {
+    return `<option value="">(No node types defined — create some in the Node Types tab)</option>`;
+  }
+  let html = `<option value="">(pick a node type)</option>`;
+  const execTypes = _cachedNodeTypes.filter(n => n.classification === 'execute');
+  const branchTypes = _cachedNodeTypes.filter(n => n.classification === 'branch');
+  if (execTypes.length) {
+    html += `<optgroup label="Execution">`;
+    for (const nt of execTypes) {
+      html += `<option value="${_esc(nt.type_id)}"${nt.type_id === selectedRef ? ' selected' : ''}>${_esc(nt.name)} (${_esc(nt.classification || 'execute')})</option>`;
+    }
+    html += `</optgroup>`;
+  }
+  if (branchTypes.length) {
+    html += `<optgroup label="Branching">`;
+    for (const nt of branchTypes) {
+      html += `<option value="${_esc(nt.type_id)}"${nt.type_id === selectedRef ? ' selected' : ''}>${_esc(nt.name)}</option>`;
+    }
+    html += `</optgroup>`;
+  }
+  return html;
+}
 
-  const qualityType = QUALITY_OPTIONS.includes(step?.quality_check?.type)
-    ? step.quality_check.type
-    : 'llm_eval';
+function _buildNodeCard(step, index, allNodesDraft = []) {
+  const isBranch = step.node_type === 'branch';
+  const branchHide = isBranch ? '' : 'display:none';
+
+  // Node type badge info
+  const nt = _cachedNodeTypes.find(n => n.type_id === step.node_type_ref) || null;
+  const ntBadge = nt
+    ? `<span class="orchestrator-plan-node-type" style="font-size:10px;margin-left:6px;">${_esc(nt.classification || 'execute')}</span>`
+    : (step.node_type_ref ? `<span class="orchestrator-plan-node-type" style="font-size:10px;margin-left:6px;opacity:.5;">unknown type</span>` : `<span style="font-size:10px;opacity:.4;margin-left:6px;">no type selected</span>`);
+
+  const onFailOpts = allNodesDraft
+    .filter(n => n.node_id !== step.node_id)
+    .map(n => {
+      const sel = n.node_id === step._onFailTarget ? ' selected' : '';
+      return `<option value="${_esc(n.node_id)}"${sel}>${_esc(n.title || n.node_id)}</option>`;
+    }).join('');
 
   return `
     <div class="blueprint-step-card" data-step-index="${index}">
       <div class="blueprint-step-card-header">
-        <span class="blueprint-step-card-title">Step ${index + 1}</span>
-        <span class="blueprint-step-card-chip">${_esc(step.step_id || '')}</span>
+        <span class="blueprint-step-card-title">Node ${index + 1}</span>
+        <span class="blueprint-step-card-chip">${_esc(step.node_id || '')}</span>
+        ${ntBadge}
         <div class="blueprint-step-card-actions">
           <button class="memory-toolbar-btn" type="button" data-action="move-up">Up</button>
           <button class="memory-toolbar-btn" type="button" data-action="move-down">Down</button>
           <button class="memory-toolbar-btn danger" type="button" data-action="delete">Remove</button>
         </div>
       </div>
-      <div class="blueprint-step-grid">
+      <div class="blueprint-step-grid" style="padding-bottom:8px;border-bottom:1px solid color-mix(in srgb,var(--border) 45%,transparent);">
+        <label class="blueprint-step-label full">
+          <span>Node type (from library)</span>
+          <select class="blueprint-step-select" data-field="node_type_ref">
+            ${_buildNodeTypePickerOptions(step.node_type_ref)}
+          </select>
+        </label>
+      </div>
+      <div class="blueprint-step-grid" style="padding-top:8px;">
         <label class="blueprint-step-label full">
           <span>Title</span>
           <input class="blueprint-step-input" data-field="title" type="text" value="${_esc(step.title || '')}" />
@@ -186,39 +283,20 @@ function _buildStepCard(step, index) {
           <span>Description</span>
           <textarea class="blueprint-step-textarea" data-field="description" rows="3">${_esc(step.description || '')}</textarea>
         </label>
-        <label class="blueprint-step-label">
-          <span>Tools (select one or more built-ins)</span>
-          <select class="blueprint-step-select" data-field="tools_select" multiple>${optionsHtml}</select>
-        </label>
-        <label class="blueprint-step-label">
-          <span>Additional tools (comma-separated)</span>
-          <input class="blueprint-step-input" data-field="tools_custom" type="text" value="${_esc(customTools.join(', '))}" placeholder="custom_tool_a, custom_tool_b" />
-        </label>
-        <label class="blueprint-step-label">
-          <span>Quality check type</span>
-          <select class="blueprint-step-select" data-field="quality_type">
-            ${QUALITY_OPTIONS.map((t) => `<option value="${t}"${qualityType === t ? ' selected' : ''}>${t}</option>`).join('')}
-          </select>
-        </label>
-        <label class="blueprint-step-label">
-          <span>Max retries</span>
-          <input class="blueprint-step-input" data-field="max_retries" type="number" min="0" step="1" value="${Number(step.max_retries || 0)}" />
-        </label>
-        <label class="blueprint-step-label full">
-          <span>Quality criteria</span>
+        <label class="blueprint-step-label full bp-branch-only" style="${branchHide}">
+          <span>Quality criteria (PASS / FAIL conditions)</span>
           <textarea class="blueprint-step-textarea" data-field="quality_criteria" rows="2">${_esc(step?.quality_check?.criteria || '')}</textarea>
         </label>
-        <label class="blueprint-step-label">
-          <span>Model override (optional)</span>
-          <input class="blueprint-step-input" data-field="model" type="text" value="${_esc(step.model || '')}" placeholder="leave blank to use default" />
+        <label class="blueprint-step-label bp-branch-only" style="${branchHide}">
+          <span>On fail → route to</span>
+          <select class="blueprint-step-select" data-field="on_fail_target">
+            <option value="">(none / stop)</option>
+            ${onFailOpts}
+          </select>
         </label>
-        <label class="blueprint-step-label">
-          <span>Depends on step IDs (comma-separated)</span>
-          <input class="blueprint-step-input" data-field="depends_on" type="text" value="${_esc((step.depends_on || []).join(', '))}" placeholder="step_abc12345" />
-        </label>
-        <label class="blueprint-step-label full">
-          <span>Inputs JSON object</span>
-          <textarea class="blueprint-step-textarea" data-field="inputs_json" rows="3">${_esc(step._inputsText || '{}')}</textarea>
+        <label class="blueprint-step-label bp-branch-only" style="${branchHide}">
+          <span>Max traversals (0 = unlimited)</span>
+          <input class="blueprint-step-input" data-field="max_traversals" type="number" min="0" max="20" value="${step._maxTraversals ?? 3}" />
         </label>
       </div>
     </div>
@@ -229,26 +307,32 @@ function _renderStepsCards() {
   const wrap = _el('blueprint-steps-cards');
   if (!wrap) return;
   const list = Array.isArray(_stepsModalDraft) ? _stepsModalDraft : [];
+  const noTypesHint = !_cachedNodeTypes.length
+    ? `<div style="font-size:12px;opacity:.6;margin-bottom:8px;padding:6px 10px;background:color-mix(in srgb,var(--accent-warning,#f59e0b) 12%,transparent);border-radius:6px;">No node types defined yet — go to the <strong>Node Types</strong> tab to create some first.</div>`
+    : '';
   if (!list.length) {
-    wrap.innerHTML = '<div class="memory-empty">No steps yet. Click Add Step.</div>';
-    _modalStatus('No steps configured yet');
+    wrap.innerHTML = noTypesHint + '<div class="memory-empty">No nodes yet. Click Add Node.</div>';
+    _modalStatus('No nodes configured yet');
     return;
   }
-  wrap.innerHTML = list.map((step, idx) => _buildStepCard(step, idx)).join('');
-  _modalStatus(`${list.length} step(s) loaded`);
+  wrap.innerHTML = noTypesHint + list.map((step, idx) => _buildNodeCard(step, idx, list)).join('');
+  _modalStatus(`${list.length} node(s) loaded`);
 }
 
-function _openStepsModal() {
+async function _openStepsModal() {
   const modal = _el('blueprint-steps-modal');
   if (!modal) return;
   let parsed;
   try {
-    parsed = _parseStepsJson();
+    parsed = _parseNodesJson();
   } catch (e) {
-    _showStatus(e?.message || 'Invalid steps JSON', true);
+    _showStatus(e?.message || 'Invalid nodes JSON', true);
     return;
   }
-  _stepsModalDraft = parsed.map((s, i) => _normalizeStep(s, i));
+  let edges = [];
+  try { edges = _parseEdgesJson(); } catch { /* proceed with no edges */ }
+  await _fetchNodeTypePool();
+  _stepsModalDraft = parsed.map((s, i) => _normalizeNode(s, i, edges));
   modal.classList.remove('hidden');
   _renderStepsCards();
 }
@@ -270,67 +354,42 @@ function _selectedValues(selectEl) {
 
 function _updateToolsFromCard(card, step) {
   const select = card.querySelector('[data-field="tools_select"]');
-  const custom = card.querySelector('[data-field="tools_custom"]');
-  const selected = _selectedValues(select);
-  const extras = String(custom?.value || '')
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const seen = new Set();
-  step.tools = [...selected, ...extras].filter((t) => {
-    const key = t.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  step.tools = _selectedValues(select);
 }
 
-function _parseModalStepsForSave() {
+function _parseModalNodesForSave() {
   const out = [];
   const steps = Array.isArray(_stepsModalDraft) ? _stepsModalDraft : [];
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i] || {};
     const title = String(step.title || '').trim();
     const description = String(step.description || '').trim();
-    if (!title) throw new Error(`Step ${i + 1} is missing title`);
-    if (!description) throw new Error(`Step ${i + 1} is missing description`);
+    if (!title) throw new Error(`Node ${i + 1} is missing title`);
+    if (!description) throw new Error(`Node ${i + 1} is missing description`);
+    if (!step.node_type_ref) throw new Error(`Node ${i + 1} has no node type selected`);
 
-    const qualityType = QUALITY_OPTIONS.includes(String(step?.quality_check?.type || '').trim())
-      ? String(step.quality_check.type).trim()
-      : 'llm_eval';
-    let inputs = {};
-    const rawInputs = String(step._inputsText || '{}').trim() || '{}';
-    try {
-      const parsed = JSON.parse(rawInputs);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        inputs = parsed;
-      } else {
-        throw new Error('must be an object');
-      }
-    } catch (e) {
-      throw new Error(`Step ${i + 1} inputs JSON is invalid: ${e.message || e}`);
-    }
+    // Resolve tools/model/node_type from the node type definition
+    const nt = _cachedNodeTypes.find(n => n.type_id === step.node_type_ref) || null;
+    const nodeType = nt ? (nt.classification === 'branch' ? 'branch' : 'execute') : step.node_type || 'execute';
+    const tools = nt ? (Array.isArray(nt.tools) ? nt.tools : []) : (step.tools || []);
+    const model = nt ? (nt.model || '') : (step.model || '');
+    const qualType = nt ? (nt.quality_check_type || 'llm_eval') : (step?.quality_check?.type || 'llm_eval');
 
     out.push({
-      step_id: String(step.step_id || _newStepId()).trim() || _newStepId(),
+      node_id: String(step.node_id || _newNodeId()).trim() || _newNodeId(),
+      node_type_ref: step.node_type_ref,
+      node_type: nodeType,
       title,
       description,
-      tools: Array.isArray(step.tools) ? step.tools.map((t) => String(t || '').trim()).filter(Boolean) : [],
-      model: String(step.model || '').trim(),
-      inputs,
+      tools,
+      model,
       quality_check: {
-        type: qualityType,
+        type: qualType,
         criteria: String(step?.quality_check?.criteria || '').trim(),
       },
-      max_retries: Math.max(0, Number.parseInt(step.max_retries, 10) || 0),
-      depends_on: Array.isArray(step.depends_on)
-        ? step.depends_on.map((x) => String(x || '').trim()).filter(Boolean)
-        : [],
     });
   }
-  if (!out.length) {
-    throw new Error('At least one step is required');
-  }
+  if (!out.length) throw new Error('At least one node is required');
   return out;
 }
 
@@ -344,31 +403,31 @@ function _onStepsCardsInput(event) {
   const field = target.dataset.field;
   if (!field) return;
 
-  if (field === 'title') {
+  if (field === 'node_type_ref') {
+    const nt = _cachedNodeTypes.find(n => n.type_id === target.value) || null;
+    step.node_type_ref = target.value || null;
+    step.node_type = nt ? (nt.classification === 'branch' ? 'branch' : 'execute') : step.node_type;
+    // Show/hide branch-specific fields on this card
+    const isBranch = step.node_type === 'branch';
+    card.querySelectorAll('.bp-branch-only').forEach(el => { el.style.display = isBranch ? '' : 'none'; });
+    // Update header badge
+    const badgeEl = card.querySelector('.nt-badge');
+    if (badgeEl && nt) {
+      badgeEl.textContent = nt.classification;
+    }
+  } else if (field === 'title') {
     step.title = target.value;
   } else if (field === 'description') {
     step.description = target.value;
-  } else if (field === 'tools_select' || field === 'tools_custom') {
-    _updateToolsFromCard(card, step);
-  } else if (field === 'quality_type') {
-    step.quality_check = step.quality_check || {};
-    step.quality_check.type = QUALITY_OPTIONS.includes(target.value) ? target.value : 'llm_eval';
   } else if (field === 'quality_criteria') {
     step.quality_check = step.quality_check || {};
     step.quality_check.criteria = target.value;
-  } else if (field === 'max_retries') {
-    step.max_retries = target.value;
-  } else if (field === 'model') {
-    step.model = target.value;
-  } else if (field === 'depends_on') {
-    step.depends_on = String(target.value || '')
-      .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean);
-  } else if (field === 'inputs_json') {
-    step._inputsText = target.value;
+  } else if (field === 'on_fail_target') {
+    step._onFailTarget = target.value;
+  } else if (field === 'max_traversals') {
+    step._maxTraversals = Math.max(0, Number(target.value) || 0);
   }
-  _modalStatus('Unsaved step changes');
+  _modalStatus('Unsaved node changes');
 }
 
 function _onStepsCardsClick(event) {
@@ -392,36 +451,56 @@ function _onStepsCardsClick(event) {
     _stepsModalDraft[idx] = tmp;
   }
   _renderStepsCards();
-  _modalStatus('Unsaved step changes');
+  _modalStatus('Unsaved node changes');
 }
 
-function _addStepCard() {
+function _addNodeCard() {
   if (!Array.isArray(_stepsModalDraft)) _stepsModalDraft = [];
-  _stepsModalDraft.push(_normalizeStep({
-    step_id: _newStepId(),
-    title: `Step ${_stepsModalDraft.length + 1}`,
+  _stepsModalDraft.push(_normalizeNode({
+    node_id: _newNodeId(),
+    node_type_ref: null,
+    node_type: 'execute',
+    title: `Node ${_stepsModalDraft.length + 1}`,
     description: '',
     tools: [],
     model: '',
-    inputs: {},
     quality_check: { type: 'llm_eval', criteria: '' },
-    max_retries: 2,
-    depends_on: [],
   }, _stepsModalDraft.length));
   _renderStepsCards();
-  _modalStatus('Added step. Fill required fields before saving.');
+  _modalStatus('Added node. Fill required fields before saving.');
 }
 
-function _saveStepsModal() {
+function _mergeBranchEdges(existingEdges, draftNodes) {
+  const branchIds = new Set(draftNodes.filter(n => n.node_type === 'branch').map(n => n.node_id));
+  const kept = existingEdges.filter(e => !(branchIds.has(e.from_node) && e.condition === 'on_fail'));
+  for (const node of draftNodes) {
+    if (node.node_type === 'branch' && node._onFailTarget) {
+      kept.push({
+        from_node: node.node_id,
+        to_node: node._onFailTarget,
+        condition: 'on_fail',
+        max_traversals: Number(node._maxTraversals) || 3,
+      });
+    }
+  }
+  return kept;
+}
+
+function _saveNodesModal() {
   try {
-    const steps = _parseModalStepsForSave();
+    const nodes = _parseModalNodesForSave();
     const ta = _el('blueprint-steps-json');
-    if (ta) ta.value = JSON.stringify(steps, null, 2);
+    if (ta) ta.value = JSON.stringify(nodes, null, 2);
+    let existingEdges = [];
+    try { existingEdges = _parseEdgesJson(); } catch { /* start fresh */ }
+    const mergedEdges = _mergeBranchEdges(existingEdges, Array.isArray(_stepsModalDraft) ? _stepsModalDraft : []);
+    const edgesTa = _el('blueprint-edges-json');
+    if (edgesTa) edgesTa.value = JSON.stringify(mergedEdges, null, 2);
     _renderStepsSummary();
-    _showStatus(`Updated ${steps.length} step(s) from card editor`);
+    _showStatus(`Updated ${nodes.length} node(s) from card editor`);
     _closeStepsModal();
   } catch (e) {
-    _modalStatus(e?.message || 'Unable to save steps', true);
+    _modalStatus(e?.message || 'Unable to save nodes', true);
   }
 }
 
@@ -464,7 +543,29 @@ function _renderList() {
         </div>
         ${subtitle ? `<div class="memory-item-source" style="margin-top:3px;opacity:.7;white-space:normal;word-break:break-word;">${_esc(subtitle)}</div>` : ''}
       </div>
+      <button type="button" class="memory-toolbar-btn blueprint-copy-json-btn" title="Copy blueprint JSON to clipboard" style="flex-shrink:0;margin-left:8px;">Copy JSON</button>
     `;
+
+    row.querySelector('.blueprint-copy-json-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      const jsonStr = JSON.stringify(bp, null, 2);
+      try {
+        await navigator.clipboard.writeText(jsonStr);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = jsonStr;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    });
 
     row.addEventListener('click', () => {
       _selectedName = String(bp.name || '');
@@ -480,8 +581,9 @@ function _loadIntoEditor(bp) {
   _el('blueprint-name').value = bp?.name || '';
   _el('blueprint-display-name').value = bp?.display_name || '';
   _el('blueprint-description').value = bp?.description || '';
-  _el('blueprint-keywords').value = (bp?.trigger_keywords || []).join(', ');
-  _el('blueprint-steps-json').value = JSON.stringify(bp?.steps || [], null, 2);
+  _el('blueprint-steps-json').value = JSON.stringify(bp?.nodes || [], null, 2);
+  const edgesEl = _el('blueprint-edges-json');
+  if (edgesEl) edgesEl.value = JSON.stringify(bp?.edges || [], null, 2);
   _renderStepsSummary();
 
   const del = _el('blueprint-delete-btn');
@@ -494,30 +596,40 @@ function _loadIntoEditor(bp) {
 }
 
 function _emptyBlueprint() {
+  const n1 = _newNodeId();
+  const n2 = _newNodeId();
+  const n3 = _newNodeId();
   return {
     name: '',
     display_name: '',
     description: '',
-    trigger_keywords: [],
-    steps: [
+    nodes: [
       {
-        title: 'Clarify objective',
-        description: 'Interpret the request and list constraints.',
-        tools: [],
-        max_retries: 1,
-      },
-      {
+        node_id: n1,
+        node_type: 'execute',
         title: 'Execute core work',
         description: 'Do the key task and capture outputs.',
         tools: [],
-        max_retries: 2,
       },
       {
-        title: 'Validate and summarize',
-        description: 'Check quality and present final output.',
+        node_id: n2,
+        node_type: 'reflect',
+        title: 'Reflect on output',
+        description: 'Evaluate quality of the previous node output.',
         tools: [],
-        max_retries: 1,
       },
+      {
+        node_id: n3,
+        node_type: 'format',
+        title: 'Format final report',
+        description: 'Synthesize all context into a polished final report.',
+        tools: [],
+      },
+    ],
+    edges: [
+      { from_node: n1, to_node: n2, condition: 'default', max_traversals: 3 },
+      { from_node: n2, to_node: n3, condition: 'on_pass', max_traversals: 1 },
+      { from_node: n2, to_node: n1, condition: 'on_fail', max_traversals: 2 },
     ],
   };
 }
@@ -529,22 +641,26 @@ function _collectEditorPayload() {
   const normalized = _normalizeName(rawName || current?.name || '');
   if (!normalized) throw new Error('Blueprint name is required');
 
-  let steps;
+  let nodes;
   try {
-    steps = _parseStepsJson();
+    nodes = _parseNodesJson();
   } catch (e) {
-    throw new Error(`Invalid steps JSON: ${e.message || e}`);
+    throw new Error(`Invalid nodes JSON: ${e.message || e}`);
+  }
+
+  let edges = [];
+  try {
+    edges = _parseEdgesJson();
+  } catch (e) {
+    throw new Error(`Invalid edges JSON: ${e.message || e}`);
   }
 
   return {
     name: normalized,
     display_name: (_el('blueprint-display-name').value || normalized).trim(),
     description: (_el('blueprint-description').value || '').trim(),
-    trigger_keywords: (_el('blueprint-keywords').value || '')
-      .split(',')
-      .map((x) => x.trim().toLowerCase())
-      .filter(Boolean),
-    steps,
+    nodes,
+    edges,
   };
 }
 
@@ -642,24 +758,24 @@ function _newBlueprint() {
   _showStatus('Create a new custom blueprint and click Save');
 }
 
-function _validateSteps() {
+function _validateNodes() {
   try {
-    const parsed = _parseStepsJson();
-    _showStatus(`Valid JSON: ${parsed.length} step(s)`);
+    const parsed = _parseNodesJson();
+    _showStatus(`Valid JSON: ${parsed.length} node(s)`);
   } catch (e) {
-    _showStatus(e?.message || 'Invalid steps JSON', true);
+    _showStatus(e?.message || 'Invalid nodes JSON', true);
   }
 }
 
-function _formatSteps() {
+function _formatNodes() {
   try {
-    const parsed = _parseStepsJson();
+    const parsed = _parseNodesJson();
     const ta = _el('blueprint-steps-json');
     if (ta) ta.value = JSON.stringify(parsed, null, 2);
     _renderStepsSummary();
-    _showStatus('Steps formatted and validated');
+    _showStatus('Nodes formatted and validated');
   } catch (e) {
-    _showStatus(e?.message || 'Unable to format steps', true);
+    _showStatus(e?.message || 'Unable to format nodes', true);
   }
 }
 
@@ -674,8 +790,9 @@ function _cloneAsCustom() {
   _el('blueprint-name').value = cloneName;
   _el('blueprint-display-name').value = `${current.display_name || current.name} (Custom)`;
   _el('blueprint-description').value = current.description || '';
-  _el('blueprint-keywords').value = (current.trigger_keywords || []).join(', ');
-  _el('blueprint-steps-json').value = JSON.stringify(current.steps || [], null, 2);
+  _el('blueprint-steps-json').value = JSON.stringify(current.nodes || [], null, 2);
+  const edgesEl = _el('blueprint-edges-json');
+  if (edgesEl) edgesEl.value = JSON.stringify(current.edges || [], null, 2);
   _renderStepsSummary();
   const nameInput = _el('blueprint-name');
   if (nameInput) {
@@ -706,9 +823,9 @@ export function initBlueprintsTab() {
   const inputs = [
     _el('blueprint-name'),
     _el('blueprint-display-name'),
-    _el('blueprint-keywords'),
     _el('blueprint-description'),
     _el('blueprint-steps-json'),
+    _el('blueprint-edges-json'),
   ].filter(Boolean);
 
   if (saveBtn && !saveBtn.dataset.bound) {
@@ -725,11 +842,11 @@ export function initBlueprintsTab() {
   }
   if (validateBtn && !validateBtn.dataset.bound) {
     validateBtn.dataset.bound = '1';
-    validateBtn.addEventListener('click', _validateSteps);
+    validateBtn.addEventListener('click', _validateNodes);
   }
   if (formatBtn && !formatBtn.dataset.bound) {
     formatBtn.dataset.bound = '1';
-    formatBtn.addEventListener('click', _formatSteps);
+    formatBtn.addEventListener('click', _formatNodes);
   }
   if (cloneBtn && !cloneBtn.dataset.bound) {
     cloneBtn.dataset.bound = '1';
@@ -737,7 +854,7 @@ export function initBlueprintsTab() {
   }
   if (editStepsBtn && !editStepsBtn.dataset.bound) {
     editStepsBtn.dataset.bound = '1';
-    editStepsBtn.addEventListener('click', _openStepsModal);
+    editStepsBtn.addEventListener('click', () => _openStepsModal().catch(e => _showStatus(e?.message || 'Failed to open editor', true)));
   }
   if (modalCloseBtn && !modalCloseBtn.dataset.bound) {
     modalCloseBtn.dataset.bound = '1';
@@ -749,11 +866,11 @@ export function initBlueprintsTab() {
   }
   if (modalSaveBtn && !modalSaveBtn.dataset.bound) {
     modalSaveBtn.dataset.bound = '1';
-    modalSaveBtn.addEventListener('click', _saveStepsModal);
+    modalSaveBtn.addEventListener('click', _saveNodesModal);
   }
   if (modalAddStepBtn && !modalAddStepBtn.dataset.bound) {
     modalAddStepBtn.dataset.bound = '1';
-    modalAddStepBtn.addEventListener('click', _addStepCard);
+    modalAddStepBtn.addEventListener('click', _addNodeCard);
   }
   if (cards && !cards.dataset.bound) {
     cards.dataset.bound = '1';

@@ -10,7 +10,7 @@ from typing import Any
 from src.agent_loop import stream_agent_loop
 from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
 from src.llm_core import llm_call_async_with_fallback
-from src.orchestrator.schemas import PlanStep
+from src.orchestrator.schemas import GraphNode
 from core.database import Session, SessionLocal
 
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
@@ -93,7 +93,7 @@ def _normalize_tool_token(raw: str | None) -> str | None:
     return token or None
 
 
-def _normalized_step_tools(step: PlanStep) -> list[str]:
+def _normalized_step_tools(step: GraphNode) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for raw in (step.tools or []):
@@ -107,7 +107,7 @@ def _normalized_step_tools(step: PlanStep) -> list[str]:
     return out
 
 
-def _resolve_step_model(step: PlanStep, fallback_model: str) -> str:
+def _resolve_step_model(step: GraphNode, fallback_model: str) -> str:
     candidate = str(getattr(step, "model", "") or "").strip()
     if not candidate:
         return fallback_model
@@ -166,7 +166,7 @@ def _resolve_candidates(
     return out
 
 
-def _step_relevant_tools(step: PlanStep) -> set[str] | None:
+def _step_relevant_tools(step: GraphNode) -> set[str] | None:
     names: set[str] = set()
     for low in _normalized_step_tools(step):
         # Planner labels can include pseudo-tools; map common ones to actual
@@ -186,7 +186,7 @@ def _step_relevant_tools(step: PlanStep) -> set[str] | None:
     return names or None
 
 
-def _step_requests_deep_research(step: PlanStep) -> bool:
+def _step_requests_deep_research(step: GraphNode) -> bool:
     for low in _step_relevant_tools(step) or set():
         if low in {
             "trigger_research",
@@ -201,7 +201,7 @@ def _step_requests_deep_research(step: PlanStep) -> bool:
     return False
 
 
-def _step_requests_web_search(step: PlanStep) -> bool:
+def _step_requests_web_search(step: GraphNode) -> bool:
     return "web_search" in (_step_relevant_tools(step) or set())
 
 
@@ -214,7 +214,7 @@ def _internal_tool_headers(owner: str | None) -> dict[str, str]:
     return headers
 
 
-def _derive_search_query(objective: str, step: PlanStep) -> tuple[str, str | None]:
+def _derive_search_query(objective: str, step: GraphNode) -> tuple[str, str | None]:
     obj = re.sub(r"\s*\((revised|updated)\)\s*", " ", str(objective or "").strip(), flags=re.IGNORECASE).strip()
     step_text = re.sub(r"\s*\((revised|updated)\)\s*", " ", f"{step.title} {step.description}".strip(), flags=re.IGNORECASE).strip()
     generic_step = any(
@@ -255,7 +255,7 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
 async def _plan_search_query(
     *,
     objective: str,
-    step: PlanStep,
+    step: GraphNode,
     owner: str | None,
     session_id: str | None,
     prior_context: str,
@@ -312,7 +312,7 @@ async def _plan_search_query(
 async def _fallback_web_search(
     *,
     objective: str,
-    step: PlanStep,
+    step: GraphNode,
     owner: str | None,
     session_id: str | None,
     prior_context: str,
@@ -682,11 +682,11 @@ async def format_final_report(
 
 
 async def execute_step(
-    step: PlanStep,
+    step: GraphNode,
     objective: str,
     owner: str | None,
     session_id: str,
-    prior_step_outputs: list[dict[str, str]] | None = None,
+    prior_node_outputs: list[dict[str, str]] | None = None,
 ) -> str:
     candidates = _resolve_candidates(owner=owner, session_id=session_id)
     if not candidates:
@@ -697,23 +697,18 @@ async def execute_step(
     relevant_tools = _step_relevant_tools(step)
     research_wait_ids: list[str] = []
     research_sources: list[dict[str, Any]] = []
-    prior_outputs = [item for item in (prior_step_outputs or []) if isinstance(item, dict)]
-    dependency_ids = {str(dep or "").strip() for dep in (step.depends_on or []) if str(dep or "").strip()}
-    dependency_outputs = [
-        item for item in prior_outputs
-        if str(item.get("step_id") or "").strip() in dependency_ids
-    ]
-    relevant_prior_outputs = dependency_outputs or prior_outputs[-3:]
+    prior_outputs = [item for item in (prior_node_outputs or []) if isinstance(item, dict)]
+    relevant_prior_outputs = prior_outputs[-3:]
 
     context_blocks: list[str] = []
     for item in relevant_prior_outputs:
-        step_id = str(item.get("step_id") or "").strip() or "unknown"
-        title = str(item.get("title") or "").strip() or step_id
+        node_id = str(item.get("node_id") or "").strip() or "unknown"
+        title = str(item.get("title") or "").strip() or node_id
         output = str(item.get("output") or "").strip()
         if not output:
             continue
         context_blocks.append(
-            f"Step {title} ({step_id}) output:\n{output}"
+            f"Step {title} ({node_id}) output:\n{output}"
         )
     prior_context = "\n\n".join(context_blocks).strip()
 
@@ -728,7 +723,6 @@ async def execute_step(
             f"Overall objective:\n{objective}\n\n"
             f"Step title: {step.title}\n"
             f"Step description: {step.description}\n"
-            + (f"Dependencies: {', '.join(step.depends_on)}\n" if step.depends_on else "")
             + (f"\nRelevant completed step outputs:\n{prior_context}\n" if prior_context else "")
             + "\nRules: this step has no tools. Produce the step result directly in plain text. "
             "Do not output shell/python snippets, pseudo-tool calls, or setup instructions."
@@ -766,7 +760,6 @@ async def execute_step(
                 f"Step title: {step.title}\n"
                 f"Step description: {step.description}\n"
                 f"Preferred tools: {preferred_tools_text}\n"
-                + (f"Dependencies: {', '.join(step.depends_on)}\n" if step.depends_on else "")
                 + (f"\nRelevant completed step outputs:\n{prior_context}\n" if prior_context else "")
                 + ("\nRequired behavior: execute the needed tools now and return the actual computed/search results for this step. Do not return instructions telling the user how to run code or what command to execute.\n" if must_execute_tool else "")
                 + "Produce result text for this step only."
@@ -970,7 +963,7 @@ async def execute_step(
 
 
 async def reflect(
-    step: PlanStep,
+    step: GraphNode,
     output: str,
     owner: str | None = None,
     session_id: str | None = None,
@@ -1024,6 +1017,3 @@ async def reflect(
     return bool(output.strip()), v or "Fallback quality verdict"
 
 
-async def handle_failure(retry_count: int, max_retries: int) -> bool:
-    await asyncio.sleep(0)
-    return retry_count < max_retries

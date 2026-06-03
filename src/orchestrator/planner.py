@@ -1,63 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.llm_core import llm_call_async
 from src.orchestrator.blueprints import all_blueprints, get_blueprint
-from src.orchestrator.schemas import ExecutionPlan, PlanStep, QualityCheck
+from src.orchestrator.schemas import ExecutionPlan, GraphNode, GraphEdge, NodeType, EdgeCondition
 
 logger = logging.getLogger(__name__)
 
-_RESEARCH_KEYWORDS = (
-    "research",
-    "investigate",
-    "best",
-    "compare",
-    "sources",
-    "deep dive",
-    "market",
-    "cards",
-)
-
-_PYTHON_CALC_KEYWORDS = (
-    "python",
-    "calculate",
-    "calculation",
-    "compute",
-    "estimated value",
-    "estimate value",
-    "value gain",
-    "yearly value",
-    "model scenario",
-)
-
-_TOOL_NONE_MARKERS = {
-    "",
-    "none",
-    "no_tool",
-    "no_tools",
-    "no-tool",
-    "no-tools",
-    "null",
-    "n/a",
-    "na",
-    "auto",
-    "default",
-}
-
-_TOOL_PREFIXES = {
-    "tool",
-    "tools",
-    "autotool",
-    "autotools",
-    "model",
-    "models",
-}
-
-_ALLOWED_STEP_TOOLS = {
+_BUILTIN_TOOLS = {
     "web_search",
     "trigger_research",
     "manage_research",
@@ -73,25 +28,50 @@ _ALLOWED_STEP_TOOLS = {
     "list_emails",
 }
 
-_WRITING_STEP_HINTS = (
-    "write",
-    "draft",
-    "story",
-    "concept",
-    "idea",
-    "summarize",
-    "select",
-    "choose",
-)
+_NODE_TYPES_PATH = Path("data") / "node_types.json"
 
-_CALC_HINTS = (
-    "calculate",
-    "calculation",
-    "compute",
-    "script",
-    "python",
-    "analysis code",
-)
+
+def _load_node_type_defs() -> list[dict]:
+    try:
+        if not _NODE_TYPES_PATH.exists():
+            return []
+        raw = json.loads(_NODE_TYPES_PATH.read_text(encoding="utf-8"))
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def _allowed_tools_for_plan() -> set[str]:
+    """Return the union of builtin tools and every tool referenced in user node types."""
+    tools = set(_BUILTIN_TOOLS)
+    for nt in _load_node_type_defs():
+        for t in (nt.get("tools") or []):
+            if t and isinstance(t, str):
+                tools.add(t.strip())
+    return tools
+
+
+def _node_types_context_block() -> str:
+    """Build a human-readable block describing the user-defined node type library."""
+    defs = _load_node_type_defs()
+    if not defs:
+        return ""
+    lines = ["AVAILABLE NODE TYPE TEMPLATES (prefer these when they fit the task):"]
+    for nt in defs:
+        tid = nt.get("type_id", "")
+        name = nt.get("name", tid)
+        classif = nt.get("classification", "execute")
+        tools = nt.get("tools") or []
+        tools_str = ", ".join(tools) if tools else "none"
+        qc = nt.get("quality_check_type", "llm_eval")
+        lines.append(
+            f'- type_id="{tid}" name="{name}" classification={classif} tools=[{tools_str}] quality_check_type={qc}'
+        )
+    lines.append(
+        "When you use one of these templates for a node, set node_type_ref to its type_id "
+        "and copy its tools list into the node's tools array."
+    )
+    return "\n".join(lines)
 
 
 @dataclass
@@ -104,53 +84,21 @@ class PlanningSession:
 _planning_sessions: dict[str, PlanningSession] = {}
 
 
-def _heuristic_complex(message: str) -> bool:
-    msg = (message or "").strip().lower()
-    if not msg:
-        return False
-    if len(msg) > 180:
-        return True
-    needles = (
-        "build",
-        "implement",
-        "integrate",
-        "plan",
-        "phases",
-        "multi-step",
-        "roadmap",
-        "orchestrate",
-        "end-to-end",
-    )
-    return any(n in msg for n in needles)
-
-
-def _choose_blueprint_heuristic(message: str) -> str:
-    msg = (message or "").lower()
-    scored: list[tuple[int, str]] = []
-    for bp in all_blueprints():
-        hits = sum(1 for k in (bp.trigger_keywords or []) if k and k in msg)
-        scored.append((hits, bp.name))
-    scored.sort(reverse=True)
-    if scored and scored[0][0] > 0:
-        return scored[0][1]
-    if scored:
-        return scored[0][1]
-    return ""
-
-
 async def _classify_complex(
     message: str,
     endpoint_url: str,
     model: str,
     headers: dict | None,
 ) -> bool:
+    msg = (message or "").strip()
+    # Simple length-based fallback when LLM is unavailable.
     if not endpoint_url or not model:
-        return _heuristic_complex(message)
+        return len(msg) > 180
 
     prompt = (
         "Classify user objective complexity for planning orchestration. "
         "Reply with exactly one token: COMPLEX or SIMPLE.\n\n"
-        f"User request:\n{message}"
+        f"User request:\n{msg}"
     )
     try:
         out = await llm_call_async(
@@ -171,8 +119,8 @@ async def _classify_complex(
         if "SIMPLE" in token:
             return False
     except Exception:
-        logger.debug("Complexity classifier failed; using heuristic", exc_info=True)
-    return _heuristic_complex(message)
+        logger.debug("Complexity classifier failed; using length heuristic", exc_info=True)
+    return len(msg) > 180
 
 
 async def _select_blueprint(
@@ -181,16 +129,25 @@ async def _select_blueprint(
     model: str,
     headers: dict | None,
 ) -> str:
-    if not endpoint_url or not model:
-        return _choose_blueprint_heuristic(message)
-
-    names = {bp.name for bp in all_blueprints()}
-    if not names:
+    blueprints = all_blueprints()
+    if not blueprints:
         return ""
-    bp_list = ", ".join(sorted(names))
+
+    # Build a name -> description list for the LLM to choose from.
+    bp_descriptions = "\n".join(
+        f"- {bp.name}: {bp.description or '(no description)'}"
+        for bp in blueprints
+    )
+    names = {bp.name for bp in blueprints}
+
+    if not endpoint_url or not model:
+        # No LLM available: return the first blueprint.
+        return next(iter(names))
+
     prompt = (
-        "Select the best execution blueprint for this objective. "
-        f"Allowed values: {bp_list}. Reply with one value only.\n\n"
+        "Select the best execution blueprint for the user's objective.\n\n"
+        f"Available blueprints:\n{bp_descriptions}\n\n"
+        "Reply with the exact blueprint name only (one word, lowercase).\n\n"
         f"Objective:\n{message}"
     )
     try:
@@ -198,7 +155,7 @@ async def _select_blueprint(
             endpoint_url,
             model,
             [
-                {"role": "system", "content": "You map objectives to workflow blueprints."},
+                {"role": "system", "content": "You select workflow blueprints by matching objectives to descriptions."},
                 {"role": "user", "content": prompt},
             ],
             headers=headers,
@@ -210,167 +167,160 @@ async def _select_blueprint(
         if choice in names:
             return choice
     except Exception:
-        logger.debug("Blueprint selection failed; using heuristic", exc_info=True)
-    return _choose_blueprint_heuristic(message)
+        logger.debug("Blueprint selection failed; using first available", exc_info=True)
+    # Fallback: return first blueprint.
+    return next(iter(names))
+
+
+def _plan_for_llm(plan: ExecutionPlan) -> dict:
+    """Serialize a plan into an LLM-safe dict.
+
+    Strips backend-internal fields (plan_id, owner, session_id, node_type_ref,
+    inputs) and keeps quality_check only on branch nodes, so the LLM sees a
+    clean, semantically readable document.
+    """
+    nodes = []
+    for node in plan.nodes:
+        n: dict = {
+            "node_id": node.node_id,
+            "node_type": node.node_type.value if hasattr(node.node_type, "value") else str(node.node_type),
+            "title": node.title,
+            "description": node.description,
+            "tools": list(node.tools or []),
+            "model": node.model or "",
+        }
+        node_type_str = n["node_type"]
+        if node_type_str == "branch":
+            n["quality_check"] = {
+                "type": node.quality_check.type,
+                "criteria": node.quality_check.criteria,
+            }
+        nodes.append(n)
+
+    edges = []
+    for edge in plan.edges:
+        edges.append({
+            "edge_id": edge.edge_id,
+            "from_node": edge.from_node,
+            "to_node": edge.to_node,
+            "condition": edge.condition.value if hasattr(edge.condition, "value") else str(edge.condition),
+            "max_traversals": edge.max_traversals,
+        })
+
+    return {
+        "blueprint_type": plan.blueprint_type,
+        "objective": plan.objective,
+        "entry_node": plan.entry_node,
+        "output_format": plan.output_format,
+        "llm_modification_rationale": "",
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _clean_llm_json(s: str) -> str:
+    """Fix the most common LLM JSON output defects before strict parsing."""
+    # Remove trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+    # Python literals → JSON
+    s = re.sub(r"\bNone\b", "null", s)
+    s = re.sub(r"\bTrue\b", "true", s)
+    s = re.sub(r"\bFalse\b", "false", s)
+    # Quote unquoted enum values for known fields that the LLM sometimes writes bare.
+    # e.g.  "condition": on_pass  →  "condition": "on_pass"
+    # The regex only matches bare word tokens (no leading "), so quoted values are safe.
+    for field in ("condition", "node_type", "output_format", "type", "status"):
+        s = re.sub(
+            rf'("{field}"\s*:\s*)([a-zA-Z_][a-zA-Z0-9_]*)',
+            r'\1"\2"',
+            s,
+        )
+    return s
 
 
 def _extract_json_payload(raw: str) -> str | None:
     txt = (raw or "").strip()
     if not txt:
         return None
-    if txt.startswith("```"):
-        m = re.search(r"```(?:json|radian-plan)?\s*(\{[\s\S]*\})\s*```", txt, flags=re.IGNORECASE)
+    # Step 1: find the first fenced block anywhere in the text.
+    # Non-greedy on the fence content so we grab only the FIRST block.
+    fence = re.search(r"```(?:json|radian-plan)?\s*([\s\S]*?)\s*```", txt, flags=re.IGNORECASE)
+    if fence:
+        content = fence.group(1).strip()
+        # Step 2: extract the outermost { ... } from within the fence using GREEDY
+        # match so we get the full nested object, not just the first closing brace.
+        m = re.search(r"(\{[\s\S]*\})", content)
         if m:
             return m.group(1)
+    # Fall back: grab the outermost { ... } block in the full text (greedy).
     m2 = re.search(r"(\{[\s\S]*\})", txt)
     if m2:
         return m2.group(1)
     return None
 
 
-def _normalize_tool_token(raw: str | None) -> str | None:
-    token = str(raw or "").strip().lower()
-    if not token:
-        return None
-    token = token.replace(" ", "_")
-    if ":" in token:
-        prefix, suffix = token.split(":", 1)
-        if prefix.strip() in _TOOL_PREFIXES:
-            token = suffix.strip()
-    if token in _TOOL_NONE_MARKERS:
-        return None
-    return token or None
-
-
-def _normalize_step_tools(step: PlanStep) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in (step.tools or []):
-        token = _normalize_tool_token(raw)
-        if not token:
-            continue
-        if token in {"deep_research", "deepresearch", "research", "research_job", "research_report"}:
-            for mapped in ("trigger_research", "manage_research"):
-                if mapped not in seen:
-                    seen.add(mapped)
-                    out.append(mapped)
-            continue
-        if token.startswith("python_script") or token in {"python-script", "pandas"}:
-            token = "python"
-        if token not in _ALLOWED_STEP_TOOLS:
-            continue
-        if token in seen:
-            continue
-        seen.add(token)
-        out.append(token)
-    return out
-
-
-def _is_writing_step(step: PlanStep) -> bool:
-    text = f"{step.title} {step.description}".lower()
-    return any(hint in text for hint in _WRITING_STEP_HINTS)
-
-
-def _is_calc_step(step: PlanStep) -> bool:
-    text = f"{step.title} {step.description}".lower()
-    return any(hint in text for hint in _CALC_HINTS)
-
-
-def _step_similarity_signature(step: PlanStep) -> set[str]:
-    text = f"{step.title} {step.description}".lower()
-    words = re.findall(r"[a-z0-9_]+", text)
-    stop = {
-        "the", "a", "an", "and", "to", "of", "for", "with", "based", "on", "using",
-        "step", "task", "current", "today", "create", "generate", "write", "story",
+_JSON_SCHEMA_BLOCK = """\
+Output the plan as a JSON code block using this schema:
+```json
+{
+  "blueprint_type": "<copy from current plan>",
+  "objective": "<user objective, verbatim>",
+  "entry_node": "<node_id of first node>",
+  "output_format": "markdown_report",
+  "llm_modification_rationale": "<brief explanation of what you changed and why>",
+  "nodes": [
+    {
+      "node_id": "<semantic_snake_case e.g. reframe_objective, execute_task, quality_check_branch>",
+      "node_type": "execute",
+      "title": "<short action-oriented title>",
+      "description": "<what this node does, specific to the objective>",
+      "tools": ["<tool_name>"],
+      "model": ""
     }
-    return {w for w in words if len(w) > 2 and w not in stop}
+  ],
+  "edges": [
+    {
+      "edge_id": "<semantic_snake_case e.g. reframe_to_execute, qc_fail_to_retry>",
+      "from_node": "<node_id>",
+      "to_node": "<node_id>",
+      "condition": "default",
+      "max_traversals": 0
+    }
+  ]
+}
+```
+For branch nodes only, add: "quality_check": {"type": "llm_eval", "criteria": "<PASS condition>"}
+max_traversals: use 0 (unlimited) on all edges from execute/reflect/format nodes.
+Use a small integer (1-3) ONLY on edges from branch nodes to cap retry loops."""
 
+_DESIGN_RULES_BLOCK = """\
+NODE TYPES (node_type field values):
+- execute: Run tools or LLM to produce output for one step.
+- reflect: Evaluate the previous node output for quality — returns pass/fail, no tools needed.
+- format: Synthesize all accumulated context into a polished final report. The final node on the
+  success path must always be a format node.
+- branch: Routing-only node dedicated to quality evaluation — no tool execution, directs flow
+  via on_pass/on_fail edges based on its quality_check criteria.
 
-def _merge_duplicate_steps(steps: list[PlanStep]) -> list[PlanStep]:
-    if len(steps) < 2:
-        return steps
-    merged: list[PlanStep] = []
-    for step in steps:
-        if not merged:
-            merged.append(step)
-            continue
-        prev = merged[-1]
-        a = _step_similarity_signature(prev)
-        b = _step_similarity_signature(step)
-        overlap = len(a & b)
-        union = len(a | b) or 1
-        jaccard = overlap / union
-        if jaccard >= 0.7:
-            # Keep the earlier step and enrich tools if the later one adds value.
-            prev_tools = _normalize_step_tools(prev)
-            cur_tools = _normalize_step_tools(step)
-            prev.tools = list(dict.fromkeys(prev_tools + cur_tools))
-            continue
-        merged.append(step)
-    return merged
+EDGE CONDITIONS:
+- default: Unconditional — always traverse. Use on edges from execute/reflect/format nodes.
+- on_pass: Traverse only when the source branch node passed its quality_check.
+- on_fail: Traverse only when the source branch node failed its quality_check.
 
+max_traversals:
+- Set to 0 (unlimited) on all edges FROM execute, reflect, and format nodes.
+- Set to a small integer (1-3) ONLY on edges FROM branch nodes to cap retry loops.
 
-def _sanitize_plan(plan: ExecutionPlan, refinement_hint: str | None = None) -> ExecutionPlan:
-    refined = plan.model_copy(deep=True)
-    hint = str(refinement_hint or "").lower()
-    challenge_mode = any(k in hint for k in ("same", "duplicate", "why", "need", "unnecessary", "redundant"))
-
-    sanitized_steps: list[PlanStep] = []
-    for step in (refined.steps or []):
-        tools = _normalize_step_tools(step)
-
-        # Recover tool labels accidentally emitted into `model`.
-        model_raw = str(step.model or "").strip()
-        model_low = model_raw.lower()
-        if model_low.startswith(("autotools:", "tools:", "tool:")):
-            leaked_tool = _normalize_tool_token(model_raw)
-            if leaked_tool and leaked_tool in _ALLOWED_STEP_TOOLS and leaked_tool not in tools:
-                tools.append(leaked_tool)
-            step.model = ""
-        elif model_low in _TOOL_NONE_MARKERS:
-            step.model = ""
-
-        # Writing/concept/selection steps should not require infra tools unless
-        # the step explicitly asks for calculations/code execution.
-        if _is_writing_step(step) and not _is_calc_step(step):
-            tools = [t for t in tools if t not in {"python", "bash", "manage_notes", "manage_memory", "write_file"}]
-
-        # When user questions duplication/tool use, minimize tool load further.
-        if challenge_mode and _is_writing_step(step):
-            tools = [t for t in tools if t in {"web_search", "trigger_research", "manage_research", "read_file"}]
-
-        # Strip trigger_research/manage_research unless the objective genuinely needs
-        # deep multi-minute research. For simple tasks (creative writing, short story,
-        # quick lookup) a plain web_search is sufficient and much faster.
-        obj_text = str(plan.objective or "").lower()
-        if not _objective_needs_deep_research(obj_text):
-            needs_deep = {"trigger_research", "manage_research"}
-            if needs_deep & set(tools):
-                # Replace with web_search if this is a search/lookup step, else remove
-                step_low = f"{step.title} {step.description}".lower()
-                if any(k in step_low for k in ("search", "find", "gather", "research", "look", "fetch", "trend")):
-                    tools = [t for t in tools if t not in needs_deep]
-                    if "web_search" not in tools:
-                        tools.insert(0, "web_search")
-                else:
-                    tools = [t for t in tools if t not in needs_deep]
-
-        # Writing steps and pure reasoning steps (no tools) don't need LLM quality
-        # evaluation — there's no PASS/FAIL for a story or a plan.
-        if not tools or (_is_writing_step(step) and not _is_calc_step(step)):
-            step.quality_check = QualityCheck(type="none")
-
-        step.tools = tools
-        sanitized_steps.append(step)
-
-    refined.steps = _merge_duplicate_steps(sanitized_steps)
-    if len(refined.steps) > 1:
-        for idx, step in enumerate(refined.steps):
-            if idx == 0:
-                step.depends_on = []
-            elif not step.depends_on:
-                step.depends_on = [refined.steps[idx - 1].step_id]
-    return refined
+DESIGN RULES:
+- Use semantic snake_case node_ids (e.g. reframe_objective, execute_task, quality_check_branch).
+- Use semantic snake_case edge_ids (e.g. reframe_to_execute, qc_fail_to_retry).
+- For quality gating: execute -> branch -> (on_pass: format | on_fail: retry node).
+- Every branch node must have both an on_pass and an on_fail outbound edge.
+- Use tools only where needed; reasoning/writing nodes need no tools.
+- trigger_research and manage_research are for deep multi-source research only \
+(financial analysis, academic research, comprehensive comparisons). \
+For simple web lookups use web_search.
+- Keep model as empty string."""
 
 
 async def _plan_with_llm(
@@ -383,126 +333,97 @@ async def _plan_with_llm(
     if not endpoint_url or not model:
         return base_plan
 
-    refinement_block = ""
-    if refinement_hint and refinement_hint.strip():
-        refinement_block = (
-            "\n\nUser refinement to incorporate:\n"
-            f"{refinement_hint.strip()}\n"
-            "Update objective and steps accordingly. Do not append a literal 'User refinement' step."
-        )
+    allowed_tools = _allowed_tools_for_plan()
+    allowed_tools_text = ", ".join(sorted(allowed_tools))
+    node_types_block = _node_types_context_block()
+    is_refinement = bool(refinement_hint and refinement_hint.strip())
 
-    prompt = (
-        "You are filling a structured execution plan JSON. "
-        "Return JSON ONLY, no markdown. Keep schema-compatible fields.\n\n"
-        "Requirements:\n"
-        "- Make steps specific to the objective, not generic placeholders.\n"
-        "- If the user asked to revise a prior plan, address that feedback explicitly in the revised steps.\n"
-        "- Avoid duplicate adjacent steps; each step must have a distinct purpose.\n"
-        "- Prefer the minimum tool set needed per step; no tools is valid for reasoning/writing steps.\n"
-        "- Include meaningful step titles and descriptions.\n"
-        "- Include concrete tools per step where useful.\n"
-        "- trigger_research and manage_research are ONLY for deep multi-source research that takes several minutes "
-        "(e.g. financial analysis, academic literature, comprehensive market comparison). "
-        "For simple information lookup use web_search instead.\n"
-        "- Use ONLY real tool names in step.tools, chosen from this list: "
-        "web_search, trigger_research, manage_research, read_file, write_file, bash, python, manage_notes, manage_memory, "
-        "list_sessions, manage_calendar, read_email, list_emails.\n"
-        "- Do NOT invent pseudo-tools (no filenames, no package names such as pandas).\n"
-        "- Keep model empty string unless there is a guaranteed concrete model id.\n"
-        "- Keep existing step_id values stable when feasible.\n\n"
-        "Base plan JSON:\n"
-        f"{base_plan.model_dump_json(indent=2)}"
-        f"{refinement_block}"
-    )
+    if is_refinement:
+        system_msg = (
+            "You are an orchestration planner. The user has reviewed an execution plan and provided targeted feedback. "
+            "Apply exactly what the user asked for — no more, no less. "
+            "If the user asks to ADD a node, add it. "
+            "If the user asks to REMOVE a node, remove it. "
+            "If the user asks to CHANGE something, change only that thing. "
+            "Do NOT touch anything the user did not explicitly mention. "
+            "Preserve existing node_id and edge_id values; assign new stable IDs only for newly added nodes/edges. "
+            "Output the complete revised plan as a JSON code block."
+        )
+        user_msg = (
+            f"USER FEEDBACK (apply exactly these changes, nothing else):\n{refinement_hint.strip()}\n\n"
+            "CURRENT PLAN (start from this — modify only what the feedback requests):\n"
+            f"```json\n{json.dumps(_plan_for_llm(base_plan), indent=2)}\n```\n\n"
+            f"AVAILABLE TOOLS: {allowed_tools_text}\n\n"
+            + (_DESIGN_RULES_BLOCK + "\n\n")
+            + (node_types_block + "\n\n" if node_types_block else "")
+            + "Make exactly the changes the user described. "
+            "Every node and edge not mentioned in the feedback must be copied verbatim. "
+            "Then output the complete updated plan (all nodes, all edges).\n\n"
+            + _JSON_SCHEMA_BLOCK
+        )
+    else:
+        system_msg = (
+            "You are an orchestration planner. Given a user objective and a blueprint plan, "
+            "adapt the plan to specifically accomplish that objective. "
+            "Think through what each step should actually do and what tools are needed, "
+            "then output the complete adapted plan as a JSON code block."
+        )
+        user_msg = (
+            f"USER OBJECTIVE:\n{base_plan.objective}\n\n"
+            "BLUEPRINT TO ADAPT:\n"
+            f"```json\n{json.dumps(_plan_for_llm(base_plan), indent=2)}\n```\n\n"
+            f"AVAILABLE TOOLS: {allowed_tools_text}\n\n"
+            + (_DESIGN_RULES_BLOCK + "\n\n")
+            + (node_types_block + "\n\n" if node_types_block else "")
+            + "Think through what the objective requires — what should each node actually do? "
+            "Do the tools match the task? Should any nodes be added or removed? "
+            "Then output the complete adapted plan.\n\n"
+            + _JSON_SCHEMA_BLOCK
+        )
 
     try:
         out = await llm_call_async(
             endpoint_url,
             model,
             [
-                {"role": "system", "content": "Produce strict JSON output."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
             ],
             headers=headers,
-            temperature=0.2,
-            max_tokens=1800,
-            timeout=35,
+            temperature=0.3,
+            max_tokens=3200,
+            timeout=60,
         )
         payload = _extract_json_payload(out or "")
         if not payload:
+            logger.warning("_plan_with_llm: no JSON found in LLM output. Raw: %s", (out or "")[:400])
             return base_plan
-        plan = ExecutionPlan.model_validate_json(payload)
-        if not plan.steps:
+        try:
+            data = json.loads(_clean_llm_json(payload))
+        except json.JSONDecodeError as exc:
+            logger.warning("_plan_with_llm: JSON parse error (%s). Payload: %s", exc, payload[:400])
             return base_plan
-        return _sanitize_plan(plan, refinement_hint=refinement_hint)
+        try:
+            plan = ExecutionPlan.model_validate(data)
+        except Exception as exc:
+            logger.warning("_plan_with_llm: Pydantic validation error (%s). Data: %s", exc, str(data)[:400])
+            return base_plan
+        if not plan.nodes:
+            logger.warning("_plan_with_llm: LLM returned plan with no nodes; falling back to base plan")
+            return base_plan
+        # Restore fields the LLM doesn't emit.
+        plan.owner = base_plan.owner
+        plan.session_id = base_plan.session_id
+        # Ensure entry_node is set.
+        if not plan.entry_node and plan.nodes:
+            plan.entry_node = plan.nodes[0].node_id
+        # Strip tools that are not in the allowed set (includes user node type tools).
+        for node in plan.nodes:
+            node.tools = [t for t in (node.tools or []) if t in allowed_tools]
+        return plan
     except Exception:
+        logger.warning("_plan_with_llm: LLM plan generation failed; falling back to base plan", exc_info=True)
         return base_plan
-
-
-def _objective_needs_deep_research(objective: str) -> bool:
-    text = str(objective or "").strip().lower()
-    if not text:
-        return False
-    return any(k in text for k in _RESEARCH_KEYWORDS)
-
-
-def _objective_needs_python_calc(objective: str) -> bool:
-    text = str(objective or "").strip().lower()
-    if not text:
-        return False
-    return any(k in text for k in _PYTHON_CALC_KEYWORDS)
-
-
-def _plan_has_tool(plan: ExecutionPlan, tool_name: str) -> bool:
-    target = str(tool_name or "").strip().lower()
-    if not target:
-        return False
-    for step in (plan.steps or []):
-        for t in (step.tools or []):
-            if str(t or "").strip().lower() == target:
-                return True
-    return False
-
-
-def _ensure_research_and_calc_steps(plan: ExecutionPlan) -> ExecutionPlan:
-    """Inject required deep-research/python steps when user objective clearly asks for them."""
-    obj = str(plan.objective or "")
-    needs_research = _objective_needs_deep_research(obj)
-    needs_python = _objective_needs_python_calc(obj)
-
-    # Ensure an explicit deep research step exists for research-heavy objectives.
-    if needs_research and not _plan_has_tool(plan, "trigger_research"):
-        insert_at = 1 if len(plan.steps or []) >= 1 else 0
-        plan.steps.insert(
-            insert_at,
-            PlanStep(
-                title="Run deep research",
-                description=(
-                    "Use deep research to gather and verify high-signal sources relevant to the objective. "
-                    "Capture key facts, constraints, and trade-offs with citations."
-                ),
-                tools=["trigger_research", "manage_research"],
-                max_retries=1,
-            ),
-        )
-
-    # Ensure a concrete Python computation step exists when the user asks for calculations.
-    if needs_python and not _plan_has_tool(plan, "python"):
-        insert_at = max(0, len(plan.steps) - 1)
-        plan.steps.insert(
-            insert_at,
-            PlanStep(
-                title="Compute value scenarios in Python",
-                description=(
-                    "Run Python calculations for estimated annual value and scenario comparisons based on the "
-                    "collected evidence and stated spending profile."
-                ),
-                tools=["python"],
-                max_retries=2,
-            ),
-        )
-
-    return _sanitize_plan(plan)
 
 
 def _format_plan_card_text(plan: ExecutionPlan) -> str:
@@ -512,6 +433,7 @@ def _format_plan_card_text(plan: ExecutionPlan) -> str:
         f"{json.dumps(plan.model_dump(), indent=2)}\n"
         "```"
     )
+
 
 
 async def maybe_handle_planning_turn(
@@ -547,7 +469,6 @@ async def maybe_handle_planning_turn(
         )
         if updated is base:
             updated = base
-        updated = _ensure_research_and_calc_steps(updated)
         cur.current_plan = updated
         _planning_sessions[session_id] = cur
         return {
@@ -570,7 +491,6 @@ async def maybe_handle_planning_turn(
 
     base_plan = bp.fill(objective=message.strip(), owner=owner, session_id=session_id)
     final_plan = await _plan_with_llm(base_plan, endpoint_url, model, headers)
-    final_plan = _ensure_research_and_calc_steps(final_plan)
 
     _planning_sessions[session_id] = PlanningSession(
         active=True,

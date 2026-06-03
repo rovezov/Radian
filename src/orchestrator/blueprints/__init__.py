@@ -5,7 +5,7 @@ from pathlib import Path
 
 from core.atomic_io import atomic_write_json
 from src.orchestrator.blueprints.base import BlueprintTemplate, GenericBlueprint
-from src.orchestrator.schemas import PlanStep
+from src.orchestrator.schemas import GraphEdge, GraphNode
 
 _BUILTIN_BLUEPRINTS: dict[str, BlueprintTemplate] = {}
 
@@ -42,17 +42,18 @@ def _build_generic_blueprint(raw: dict) -> GenericBlueprint | None:
             return None
         display_name = str(raw.get("display_name") or name).strip()
         description = str(raw.get("description") or "").strip()
-        trigger_keywords = [str(k).strip().lower() for k in (raw.get("trigger_keywords") or []) if str(k).strip()]
-        steps_raw = raw.get("steps") or []
-        steps = [PlanStep.model_validate(s) for s in steps_raw if isinstance(s, dict)]
-        if not steps:
+        nodes_raw = raw.get("nodes") or []
+        edges_raw = raw.get("edges") or []
+        nodes = [GraphNode.model_validate(n) for n in nodes_raw if isinstance(n, dict)]
+        edges = [GraphEdge.model_validate(e) for e in edges_raw if isinstance(e, dict)]
+        if not nodes:
             return None
         return GenericBlueprint(
             name=name,
             display_name=display_name,
             description=description,
-            trigger_keywords=trigger_keywords,
-            steps=steps,
+            nodes=nodes,
+            edges=edges,
         )
     except Exception:
         return None
@@ -78,6 +79,42 @@ def list_blueprint_dicts() -> list[dict]:
         row = bp.to_dict()
         row["source"] = "custom"
         rows.append(row)
+    rows.sort(key=lambda r: r.get("name", ""))
+    return rows
+
+
+def upsert_custom_blueprint(raw: dict) -> dict:
+    bp = _build_generic_blueprint(raw)
+    if bp is None:
+        raise ValueError("Invalid blueprint payload")
+
+    defs = _load_custom_blueprint_defs()
+    kept = [d for d in defs if str(d.get("name") or "").strip().lower() != bp.name]
+    kept.append(bp.to_dict())
+    _save_custom_blueprint_defs(kept)
+    out = bp.to_dict()
+    out["source"] = "custom"
+    return out
+
+
+def delete_custom_blueprint(name: str) -> bool:
+    key = (name or "").strip().lower()
+    if not key:
+        return False
+    defs = _load_custom_blueprint_defs()
+    kept = [d for d in defs if str(d.get("name") or "").strip().lower() != key]
+    if len(kept) == len(defs):
+        return False
+    _save_custom_blueprint_defs(kept)
+    return True
+
+
+def all_blueprints() -> list[BlueprintTemplate]:
+    return list(_merged_blueprints().values())
+
+
+def get_blueprint(name: str) -> BlueprintTemplate | None:
+    return _merged_blueprints().get((name or "").strip().lower())
     rows.sort(key=lambda r: r.get("name", ""))
     return rows
 

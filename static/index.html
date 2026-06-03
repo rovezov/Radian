@@ -240,6 +240,117 @@
     setTimeout(function(){var l=document.getElementById('app-loader');if(l){l.style.opacity='0';setTimeout(function(){l.remove()},300)}},5000);
   })();
   </script>
+  <!-- Planner Modal -->
+  <div id="planner-modal" class="modal hidden">
+    <div class="modal-content memory-modal-content" style="background:var(--bg)">
+      <div class="modal-header">
+        <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/><path d="M7 3v2M17 3v2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Planner</h4>
+        <button class="close-btn" id="close-planner-modal" aria-label="Close planner modal">✖</button>
+      </div>
+      <div class="modal-body memory-modal-body">
+        <div class="memory-tabs">
+          <button class="memory-tab active" data-planner-tab="blueprints"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h4"/><path d="M7 3v2M17 3v2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Blueprints <span id="blueprints-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span></button>
+          <button class="memory-tab" data-planner-tab="node-types"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>Node Types <span id="node-types-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span></button>
+        </div>
+        <!-- ── Blueprints tab ── -->
+        <div class="memory-tab-panel" data-planner-panel="blueprints">
+          <div class="admin-card" style="display:flex;flex-direction:column;gap:8px;overflow:hidden;flex:1;min-height:0;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+              <h2 style="margin:0;padding:0;line-height:1;">Blueprints <span id="blueprints-count-h2" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal"></span></h2>
+              <span style="flex:1"></span>
+              <button id="blueprint-new-btn" class="memory-toolbar-btn">New</button>
+              <button id="blueprint-save-btn" class="memory-toolbar-btn">Save</button>
+              <button id="blueprint-delete-btn" class="memory-toolbar-btn danger">Delete</button>
+            </div>
+            <p class="memory-desc doclib-desc" style="margin-top:6px;">View and edit orchestrator planning blueprints. Built-ins are read-only unless you override them with a custom version.</p>
+            <div class="memory-desc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:2px;opacity:0.8;">
+              <div><strong>Left panel:</strong> choose a blueprint to inspect or override.</div>
+              <div><strong>Right panel:</strong> edit metadata and step definitions, then Save.</div>
+            </div>
+            <div class="blueprint-layout" style="display:grid;grid-template-columns:250px 1fr;gap:10px;min-height:0;flex:1;overflow:hidden;">
+              <div class="blueprint-list-pane" style="border:1px solid var(--border);border-radius:8px;overflow:auto;background:var(--panel);min-height:0;">
+                <div id="blueprints-list" class="memory-list" style="margin:0;"></div>
+              </div>
+              <div class="blueprint-editor-pane" style="display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto;padding-right:2px;">
+                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Blueprint key and title</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <input id="blueprint-name" class="memory-add-input" type="text" placeholder="name (e.g. research)" />
+                  <input id="blueprint-display-name" class="memory-add-input" type="text" placeholder="display name" />
+                </div>
+                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Purpose shown in plan cards and editor list</div>
+                <textarea id="blueprint-description" class="memory-add-input" rows="2" placeholder="description"></textarea>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  <div class="memory-desc" style="font-size:11px;opacity:0.75;margin-right:auto;">Node editor (card-based, no raw JSON required)</div>
+                  <button id="blueprint-steps-editor-btn" class="memory-toolbar-btn" type="button">Edit Nodes</button>
+                  <button id="blueprint-validate-btn" class="memory-toolbar-btn" type="button">Validate</button>
+                  <button id="blueprint-format-btn" class="memory-toolbar-btn" type="button">Format</button>
+                  <button id="blueprint-clone-btn" class="memory-toolbar-btn" type="button">Clone as Custom</button>
+                </div>
+                <div id="blueprint-steps-summary" class="blueprint-steps-summary"></div>
+                <textarea id="blueprint-steps-json" class="memory-add-input blueprint-steps-json-hidden" rows="12" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;" placeholder='nodes JSON: [{"node_id":"node_abc12345","node_type":"execute","title":"...","description":"...","tools":["web_search"]}]'></textarea>
+                <div class="memory-desc" style="font-size:11px;opacity:0.75;margin-top:4px;">Edges (conditional/default transitions between nodes)</div>
+                <textarea id="blueprint-edges-json" class="memory-add-input blueprint-steps-json-hidden" rows="6" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;" placeholder='edges JSON: [{"from_node":"node_abc12345","to_node":"node_def67890","condition":"default","max_traversals":3}]'></textarea>
+                <div id="blueprint-editor-status" class="memory-desc" style="min-height:18px;margin:0;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- ── Node Types tab ── -->
+        <div class="memory-tab-panel hidden" data-planner-panel="node-types">
+          <div class="admin-card" style="display:flex;flex-direction:column;gap:8px;overflow:hidden;flex:1;min-height:0;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+              <h2 style="margin:0;padding:0;line-height:1;">Node Types <span id="node-types-count-h2" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal"></span></h2>
+              <span style="flex:1"></span>
+              <button id="nt-new-btn" class="memory-toolbar-btn">New</button>
+              <button id="nt-save-btn" class="memory-toolbar-btn">Save</button>
+              <button id="nt-delete-btn" class="memory-toolbar-btn danger" disabled>Delete</button>
+            </div>
+            <p class="memory-desc doclib-desc" style="margin-top:6px;">Create reusable node types for your blueprints. Each type defines the classification, tools, and model. Blueprints then pick from this pool and add per-instance title and description.</p>
+            <div class="blueprint-layout" style="display:grid;grid-template-columns:220px 1fr;gap:10px;min-height:0;flex:1;overflow:hidden;">
+              <div class="blueprint-list-pane" style="border:1px solid var(--border);border-radius:8px;overflow:auto;background:var(--panel);min-height:0;">
+                <div id="node-types-list" class="memory-list" style="margin:0;"></div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto;padding-right:2px;">
+                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Name (shown in blueprint node picker)</div>
+                <input id="nt-name" class="memory-add-input" type="text" placeholder="e.g. Web Researcher" style="flex:none;height:32px;" />
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <label style="display:flex;flex-direction:column;gap:4px;">
+                    <span class="memory-desc" style="font-size:11px;opacity:0.75;">Classification</span>
+                    <select id="nt-classification" class="memory-add-input" style="height:32px;">
+                      <option value="execute">Execution</option>
+                      <option value="branch">Branching</option>
+                    </select>
+                  </label>
+                  <label style="display:flex;flex-direction:column;gap:4px;">
+                    <span class="memory-desc" style="font-size:11px;opacity:0.75;">Model override</span>
+                    <select id="nt-model" class="memory-add-input" style="height:32px;">
+                      <option value="">(session default)</option>
+                    </select>
+                  </label>
+                </div>
+                <!-- Execution-only fields -->
+                <div id="nt-exec-section">
+                  <div class="memory-desc" style="font-size:11px;opacity:0.75;margin-bottom:4px;">Tools available to this node type</div>
+                  <select id="nt-tools" class="memory-add-input" multiple style="height:120px;font-size:12px;"></select>
+                </div>
+                <!-- Branch-only fields -->
+                <div id="nt-branch-section" style="display:none;">
+                  <div class="memory-desc" style="font-size:11px;opacity:0.75;margin-bottom:4px;">Quality check method</div>
+                  <select id="nt-quality-type" class="memory-add-input" style="height:32px;">
+                    <option value="llm_eval">llm_eval — LLM judges pass/fail</option>
+                    <option value="script">script — custom script</option>
+                    <option value="none">none — always passes</option>
+                  </select>
+                </div>
+                <div id="nt-status" class="memory-desc" style="min-height:18px;margin:0;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Memory Management Modal -->
   <div id="memory-modal" class="modal hidden">
     <div class="modal-content memory-modal-content" style="background:var(--bg)">
@@ -251,7 +362,6 @@
         <div class="memory-tabs">
           <button class="memory-tab active" data-memory-tab="browse"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.3C6.2 13.5 5 11.4 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>Memories <span id="memory-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span></button>
           <button class="memory-tab" data-memory-tab="skills"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Skills <span id="skills-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span></button>
-          <button class="memory-tab" data-memory-tab="blueprints"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M3 7h18"/><path d="M3 12h18"/><path d="M3 17h18"/></svg>Blueprints <span id="blueprints-count" class="memory-count" style="font-size:0.8em;opacity:0.6;font-weight:normal;margin-left:4px">0</span></button>
           <button class="memory-tab" data-memory-tab="add"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Add</button>
           <button class="memory-tab" data-memory-tab="settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
         </div>
@@ -384,53 +494,6 @@
             <div id="skills-list" class="memory-list"></div>
           </div>
         </div>
-        <!-- ── Blueprints tab ── -->
-        <div class="memory-tab-panel hidden" data-memory-panel="blueprints">
-          <div class="admin-card" style="display:flex;flex-direction:column;gap:8px;overflow:hidden;flex:1;min-height:0;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
-              <h2 style="margin:0;padding:0;line-height:1;">Blueprints <span id="blueprints-count-h2" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal"></span></h2>
-              <span style="flex:1"></span>
-              <button id="blueprint-new-btn" class="memory-toolbar-btn">New</button>
-              <button id="blueprint-save-btn" class="memory-toolbar-btn">Save</button>
-              <button id="blueprint-delete-btn" class="memory-toolbar-btn danger">Delete</button>
-            </div>
-            <p class="memory-desc doclib-desc" style="margin-top:6px;">View and edit orchestrator planning blueprints. Built-ins are read-only unless you override them with a custom version.</p>
-            <div class="memory-desc" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:2px;opacity:0.8;">
-              <div>
-                <strong>Left panel:</strong> choose a blueprint to inspect or override.
-              </div>
-              <div>
-                <strong>Right panel:</strong> edit metadata and step definitions, then Save.
-              </div>
-            </div>
-            <div class="blueprint-layout" style="display:grid;grid-template-columns: 250px 1fr;gap:10px;min-height:0;flex:1;overflow:hidden;">
-              <div class="blueprint-list-pane" style="border:1px solid var(--border);border-radius:8px;overflow:auto;min-height:220px;background:var(--panel);min-height:0;">
-                <div id="blueprints-list" class="memory-list" style="margin:0;"></div>
-              </div>
-              <div class="blueprint-editor-pane" style="display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto;padding-right:2px;">
-                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Blueprint key and title</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                  <input id="blueprint-name" class="memory-add-input" type="text" placeholder="name (e.g. research)" />
-                  <input id="blueprint-display-name" class="memory-add-input" type="text" placeholder="display name" />
-                </div>
-                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Trigger keywords (used for automatic blueprint selection)</div>
-                <input id="blueprint-keywords" class="memory-add-input" type="text" placeholder="keywords (comma-separated)" />
-                <div class="memory-desc" style="font-size:11px;opacity:0.75;">Purpose shown in plan cards and editor list</div>
-                <textarea id="blueprint-description" class="memory-add-input" rows="2" placeholder="description"></textarea>
-                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                  <div class="memory-desc" style="font-size:11px;opacity:0.75;margin-right:auto;">Step editor (card-based, no raw JSON required)</div>
-                  <button id="blueprint-steps-editor-btn" class="memory-toolbar-btn" type="button">Edit Steps</button>
-                  <button id="blueprint-validate-btn" class="memory-toolbar-btn" type="button">Validate</button>
-                  <button id="blueprint-format-btn" class="memory-toolbar-btn" type="button">Format</button>
-                  <button id="blueprint-clone-btn" class="memory-toolbar-btn" type="button">Clone as Custom</button>
-                </div>
-                <div id="blueprint-steps-summary" class="blueprint-steps-summary"></div>
-                <textarea id="blueprint-steps-json" class="memory-add-input blueprint-steps-json-hidden" rows="12" style="font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;" placeholder='steps JSON: [{"title":"...","description":"...","tools":["web_search"]}]'></textarea>
-                <div id="blueprint-editor-status" class="memory-desc" style="min-height:18px;margin:0;"></div>
-              </div>
-            </div>
-          </div>
-        </div>
         <!-- ── Settings tab ── -->
         <div class="memory-tab-panel hidden" data-memory-panel="settings">
           <div class="admin-card">
@@ -481,20 +544,20 @@
   <div id="blueprint-steps-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="blueprint-steps-modal-title">
     <div class="modal-content admin-modal-content blueprint-steps-modal-content">
       <div class="modal-header">
-        <h4 id="blueprint-steps-modal-title">Blueprint Step Editor</h4>
+        <h4 id="blueprint-steps-modal-title">Blueprint Node Editor</h4>
         <button type="button" class="modal-close" id="blueprint-steps-modal-close" aria-label="Close">&#x2716;</button>
       </div>
       <div class="modal-body blueprint-steps-modal-body">
         <p class="memory-desc" style="margin:0 0 8px 0;opacity:0.8;">
-          Edit each step as a card. Use built-in tool and quality options, then save the steps back to this blueprint.
+          Configure each node: set its classification (execution or branching), model, and tools. For branch nodes, define quality criteria and on-fail routing. Title and description describe what the node should do.
         </p>
         <div id="blueprint-steps-cards" class="blueprint-steps-cards"></div>
       </div>
       <div class="blueprint-steps-modal-footer">
-        <button id="blueprint-step-add-btn" class="memory-toolbar-btn" type="button">Add Step</button>
+        <button id="blueprint-step-add-btn" class="memory-toolbar-btn" type="button">Add Node</button>
         <span id="blueprint-steps-modal-status" class="memory-desc" style="flex:1;min-width:0;"></span>
         <button id="blueprint-steps-modal-cancel" class="memory-toolbar-btn" type="button">Cancel</button>
-        <button id="blueprint-steps-modal-save" class="memory-toolbar-btn" type="button">Save Steps</button>
+        <button id="blueprint-steps-modal-save" class="memory-toolbar-btn" type="button">Save Nodes</button>
       </div>
     </div>
   </div>
@@ -954,6 +1017,18 @@
           </svg>
           <span class="grow">Tasks</span>
           <span id="assistant-notif-dot" class="sidebar-notif-dot" style="display:none"></span>
+        </div>
+
+        <div class="list-item" id="tool-planner-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            style="flex-shrink:0;opacity:0.5;">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M9 9h6M9 13h6M9 17h4"/>
+            <path d="M7 3v2M17 3v2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/>
+          </svg>
+          <span class="grow">Planner</span>
         </div>
 
         <div class="list-item" id="tool-theme-btn">
